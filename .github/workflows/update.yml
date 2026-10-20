@@ -1,22 +1,36 @@
+
 name: Match data every 5 minutes
+
 on:
   schedule:
-    # Requested every 5 minutes (GitHub may delay scheduled jobs)
     - cron: '2-59/5 * * * *'
   workflow_dispatch:
+
 permissions:
   contents: write
+
+concurrency:
+  group: match-data-refresh
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-        - name: Refresh football data
-          run: |
-            FULL_REFRESH=0 python scripts/update_data.py
+
+      - name: Refresh football data
+        run: |
+          FULL_REFRESH=0 python scripts/update_data.py
+
       - name: Commit snapshot if changed
         run: |
           git config user.name "github-actions[bot]"
