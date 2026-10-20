@@ -54,9 +54,9 @@ function explainModel(m,a){
   if(!a?.ready)return '';
   const elo=a.elo||{}, n=Math.min(a.nh||0,a.na||0), e=Math.min(elo.homeMatches||0,elo.awayMatches||0);
   const quality=n>=10&&e>=20?'Orta — sınırlı tarihsel örneklem':'Düşük — sınırlı tarihsel örneklem';
+  const fmtE=v=>Number.isFinite(Number(v))?Number(v).toFixed(1):'Veri yok';
   const adj=a.opponentAdjustment||{};
   const opponentNote=adj.home&&adj.away?`<p class="muted">Son rakiplerin ortalama Elo gücü: ${esc(m.home.name)} ${fmtE(adj.home.avgOpponentElo)}, ${esc(m.away.name)} ${fmtE(adj.away.avgOpponentElo)}. Rakip kalitesi düzeltmesi: ×${fmtE(adj.home.factor)} / ×${fmtE(adj.away.factor)}. Katsayılar temkinli ve henüz doğrulanmamıştır.</p>`:'';
-  const fmtE=v=>Number.isFinite(Number(v))?Number(v).toFixed(1):'Veri yok';
   return `<section class="market" style="padding:18px;margin-top:20px"><h3>Analiz nasıl hesaplandı?</h3>
     <p class="muted">Model: ${esc(a.model||'Bilinmiyor')} · Veri değerlendirmesi: <strong>${esc(quality)}</strong></p>
     <div class="stats"><div><small>${esc(m.home.name)} · Elo</small><b>${fmtE(elo.home)}</b><small>${elo.homeMatches||0} kayıtlı maç</small></div><div><small>${esc(m.away.name)} · Elo</small><b>${fmtE(elo.away)}</b><small>${elo.awayMatches||0} kayıtlı maç</small></div></div>
