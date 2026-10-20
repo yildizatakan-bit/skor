@@ -16,7 +16,7 @@ LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uef
 CUP_LEAGUES = ['tur.cup','eng.fa','eng.league_cup','esp.copa_del_rey','ger.dfb_pokal','ita.coppa_italia','fra.coupe_de_france']
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TODAY = dt.datetime.now(dt.timezone.utc).date()
-HISTORY_DAYS = 100
+HISTORY_DAYS = 180
 FUTURE_DAYS = 7
 
 
@@ -122,11 +122,13 @@ def main():
         archive = []
     by_id = {x['matchId'] for x in archive if isinstance(x, dict) and x.get('matchId')}
     analyses = {}
+    diagnostics = {}
     for match in selected:
         if match['league'] not in LEAGUES or match.get('done') or when(match['date']) <= now:
             continue
         result = calculate(match, selected)
         analyses[match['id']] = result
+        diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
         if result['ready'] and match['id'] not in by_id:
             # Select one market per match before kickoff for auditable hit rate.
             market = max(result['p'], key=result['p'].get)
@@ -139,11 +141,15 @@ def main():
     archive = sorted(archive,key=lambda x:x['kickoff'])[-2000:]
     archive_path.write_text(json.dumps({'predictions':archive},ensure_ascii=False,separators=(',',':')),encoding='utf-8')
     payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
-               'events': sorted(selected, key=lambda e: e['date']),
+               'events': sorted(selected, key=lambda e: e['date']), 'diagnostics': diagnostics,
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
                'source': 'ESPN unofficial public scoreboards; all-competition team history and probabilities computed locally'}
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')), 'utf-8')
     print(f'Saved {len(selected)} events; {sum(e["done"] for e in selected)} completed')
+    print(f'Analysis ready: {sum(x["ready"] for x in diagnostics.values())}/{len(diagnostics)}', flush=True)
+    for x in diagnostics.values():
+        if not x['ready']:
+            print(f'INSUFFICIENT {x["home"]} ({x["homeMatches"]}) vs {x["away"]} ({x["awayMatches"]})', flush=True)
 
 if __name__ == '__main__':
     main()

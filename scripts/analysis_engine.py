@@ -9,18 +9,36 @@ MARKETS = ('home','draw','away','homeOrDraw','awayOrDraw','noDraw','over15','und
 def when(s):
     return datetime.fromisoformat(s.replace('Z','+00:00'))
 
+# Conservative canonical names for known cross-competition ESPN variants.
+# Never merge two clubs merely because their numeric IDs match across leagues.
+ALIASES = {
+    'as roma':'roma', 'roma':'roma', 'roma as':'roma',
+    'fc porto':'porto', 'porto':'porto',
+    'manchester city':'manchester city', 'man city':'manchester city',
+    'ssc napoli':'napoli', 'napoli':'napoli', 'napoli ssc':'napoli',
+    'psv eindhoven':'psv', 'psv':'psv',
+    'paris saint germain':'paris saint germain', 'paris sg':'paris saint germain', 'psg':'paris saint germain',
+    'fc barcelona':'barcelona', 'barcelona':'barcelona',
+    'real madrid':'real madrid', 'real madrid cf':'real madrid',
+    'atletico madrid':'atletico madrid', 'atletico de madrid':'atletico madrid',
+    'vfb stuttgart':'stuttgart', 'stuttgart':'stuttgart',
+    'bodo glimt':'bodo glimt', 'fk bodo glimt':'bodo glimt',
+    'slovan bratislava':'slovan bratislava', 'sk slovan bratislava':'slovan bratislava',
+    'aek athens':'aek athens', 'aek athina':'aek athens',
+    'liverpool':'liverpool', 'liverpool fc':'liverpool',
+    'villarreal':'villarreal', 'villarreal cf':'villarreal',
+}
+
 def team_key(name):
-    """Fallback for ESPN IDs which can vary between competitions."""
     text=unicodedata.normalize('NFKD', name or '').casefold()
     text=''.join(c for c in text if not unicodedata.combining(c))
     text=re.sub(r'[^a-z0-9]+',' ',text).strip()
-    # Avoid merging generic club names, short acronyms, or unknown teams.
-    return text if len(text)>=7 and len(text.split())>=2 else None
+    text=re.sub(r'\s+',' ',text)
+    return ALIASES.get(text,text) if len(text)>=4 else None
 
 def same_team(side, target):
-    if side.get('id') and target.get('id') and side['id']==target['id']:
-        return True
     x,y=team_key(side.get('name')),team_key(target.get('name'))
+    # A numeric ESPN team ID is not assumed globally unique across competitions.
     return bool(x and y and x==y)
 
 def recent(events, team, kickoff, league=None):

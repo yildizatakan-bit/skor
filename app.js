@@ -64,7 +64,7 @@ async function load(force=false){
   state.loading=false;render();
 }
 // Historical results are kept in a separate collection, so past matches are never lost when the fixture list is built.
-function fixtureWithHistory(m){return {...m,analysis:state.analyses?.[m.id]||{ready:false,nh:0,na:0}}}
+function fixtureWithHistory(m){const published=state.analyses?.[m.id];return {...m,analysis:published||{ready:false,nh:0,na:0}}}
 fixture=fixtureWithHistory;
 function init(){state.history=[];state.analyses={};state.fixtures=[];render();load()}
 document.addEventListener('click',e=>{let el=e.target.closest('button');if(!el)return;let d=el.dataset;if(d.page){state.page=d.page;state.market='all';render();scrollTo(0,0)}else if(d.league!==undefined){state.league=d.league;state.slide=0;render()}else if(d.leaguepage){state.league=d.leaguepage;state.page='matches';render()}else if(d.open){state.match=d.open;state.market='all';state.page='detail';render();scrollTo(0,0)}else if(d.market){state.market=d.market;render()}else if(d.slide){state.slide+=d.slide==='next'?1:-1;let n=featuredMatches().length;state.slide=(state.slide+n)%Math.max(n,1);render()}else if(d.fav){let [matchId,k]=d.fav.split('|'),index=state.favs.findIndex(x=>x.id===d.fav);if(index>=0)state.favs.splice(index,1);else{let m=state.fixtures.find(x=>x.id===matchId),a=m&&fixture(m).analysis,found=markets.flatMap(([group,rows])=>rows.map(([name,market])=>({group,name,market}))).find(x=>x.market===k);if(!m||!a.ready||!found||a.p[k]<.5)return;state.favs.push({id:d.fav,matchId,market:k,group:found.group,name:found.name,home:m.home.name,away:m.away.name,date:m.date,p:a.p[k]})}save('favorites',state.favs);render()}else if(el.id==='manual'||el.id==='refresh'){load(true)}});
