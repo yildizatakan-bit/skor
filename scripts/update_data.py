@@ -27,7 +27,11 @@ def parse_event(e, league):
     away = next((x for x in sides if x.get('homeAway') == 'away'), None)
     if not home or not away or not e.get('date'):
         return None
-    completed = e.get('status', {}).get('type', {}).get('completed') is True
+    status = e.get('status') or {}
+    status_type = status.get('type') or {}
+    completed = status_type.get('completed') is True
+    live = not completed and str(status_type.get('state') or '').lower() == 'in'
+    clock = status.get('displayClock') or status.get('clock') or ''
     def team(t):
         info = t.get('team') or {}
         logos = info.get('logos') or []
@@ -35,9 +39,9 @@ def parse_event(e, league):
         return {'id': str(info.get('id') or ''),
                 'name': info.get('displayName') or info.get('name') or '?',
                 'logo': info.get('logo') or (logos[0].get('href') if logos else '') or '',
-                'score': int(score) if completed and str(score).isdigit() else None}
+                'score': int(score) if (completed or live) and str(score).isdigit() else None}
     return {'id': league + ':' + str(e.get('id')), 'league': league,
-            'date': e['date'], 'done': completed, 'home': team(home), 'away': team(away)}
+            'date': e['date'], 'done': completed, 'live': live, 'clock': str(clock), 'home': team(home), 'away': team(away)}
 
 
 def request(league, start, end=None):
@@ -124,12 +128,12 @@ def main():
     analyses = {}
     diagnostics = {}
     for match in selected:
-        if match['league'] not in LEAGUES or match.get('done') or when(match['date']) <= now:
+        if match['league'] not in LEAGUES or match.get('done') or (when(match['date']) <= now and not match.get('live')):
             continue
         result = calculate(match, selected)
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
-        if result['ready'] and match['id'] not in by_id:
+        if result['ready'] and not match.get('live') and match['id'] not in by_id:
             # Select one market per match before kickoff for auditable hit rate.
             market = max(result['p'], key=result['p'].get)
             archive.append({'matchId':match['id'],'league':match['league'],
