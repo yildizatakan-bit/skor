@@ -14,14 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Refresh football data
-        run: |
-          # Full historical scan at 08:00 and 20:00 Türkiye time, or manual run.
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$(date -u +%H:%M)" == "05:00" || "$(date -u +%H:%M)" == "17:00" ]]; then
-            FULL_REFRESH=1 python scripts/update_data.py
-          else
+      
+        - name: Refresh football data
+          run: |
             FULL_REFRESH=0 python scripts/update_data.py
-          fi
+
       - name: Commit snapshot if changed
         run: |
           git config user.name "github-actions[bot]"
