@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from analysis_engine import calculate, settle_archive, metrics, when
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf']
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -97,7 +98,34 @@ def main():
     upper = (last + dt.timedelta(days=1)).isoformat()
     selected = [e for e in events.values() if lower <= e.get('date', '') < upper and
                 (e.get('done') or e.get('date', '') >= TODAY.isoformat())]
-    payload = {'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
+    now = dt.datetime.now(dt.timezone.utc)
+    # Read immutable predictions from earlier successful runs. Never retroactively
+    # create a prediction for a match that has already kicked off.
+    archive_path = ROOT / 'prediction_history.json'
+    try:
+        archive = json.loads(archive_path.read_text('utf-8')).get('predictions', [])
+        if not isinstance(archive, list): archive = []
+    except (OSError, ValueError, TypeError):
+        archive = []
+    by_id = {x['matchId'] for x in archive if isinstance(x, dict) and x.get('matchId')}
+    analyses = {}
+    for match in selected:
+        if match.get('done') or when(match['date']) <= now:
+            continue
+        result = calculate(match, selected)
+        analyses[match['id']] = result
+        if result['ready'] and match['id'] not in by_id:
+            # Select one market per match before kickoff for auditable hit rate.
+            market = max(result['p'], key=result['p'].get)
+            archive.append({'matchId':match['id'],'league':match['league'],
+                'kickoff':match['date'],'createdAt':now.isoformat(),
+                'p':result['p'],'primaryMarket':market,'model':result['model'],
+                'settled':False})
+            by_id.add(match['id'])
+    settle_archive(archive, selected)
+    archive = sorted(archive,key=lambda x:x['kickoff'])[-2000:]
+    archive_path.write_text(json.dumps({'predictions':archive},ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+    payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                'events': sorted(selected, key=lambda e: e['date']),
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
                'source': 'ESPN unofficial public scoreboards; probabilities computed locally'}
