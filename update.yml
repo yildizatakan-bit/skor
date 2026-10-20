@@ -1,0 +1,27 @@
+name: Match data twice daily
+on:
+  schedule:
+    # Turkey time (UTC+3): 08:00 and 20:00
+    - cron: '0 5,17 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refresh football data
+        run: python scripts/update_data.py
+      - name: Commit snapshot if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update football data snapshot"
+            git push
+          fi
