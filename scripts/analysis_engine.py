@@ -1,5 +1,7 @@
 """Deterministic pre-match probability model and immutable prediction tracking."""
 import math
+import re
+import unicodedata
 from datetime import datetime, timezone
 
 MARKETS = ('home','draw','away','homeOrDraw','awayOrDraw','noDraw','over15','under15','over25','under25','over35','under35','btts','noBtts','homeOver05','awayOver05','homeUnder15','awayUnder15','even','odd')
@@ -7,15 +9,30 @@ MARKETS = ('home','draw','away','homeOrDraw','awayOrDraw','noDraw','over15','und
 def when(s):
     return datetime.fromisoformat(s.replace('Z','+00:00'))
 
-def recent(events, team_id, kickoff, league=None):
-    # No information from this fixture or later matches can enter a prediction.
-    rows=[m for m in events if m.get('done') and when(m['date']) < kickoff and (m['home']['id']==team_id or m['away']['id']==team_id) and isinstance(m['home'].get('score'),int) and isinstance(m['away'].get('score'),int)]
+def team_key(name):
+    """Fallback for ESPN IDs which can vary between competitions."""
+    text=unicodedata.normalize('NFKD', name or '').casefold()
+    text=''.join(c for c in text if not unicodedata.combining(c))
+    text=re.sub(r'[^a-z0-9]+',' ',text).strip()
+    # Avoid merging generic club names, short acronyms, or unknown teams.
+    return text if len(text)>=7 and len(text.split())>=2 else None
+
+def same_team(side, target):
+    if side.get('id') and target.get('id') and side['id']==target['id']:
+        return True
+    x,y=team_key(side.get('name')),team_key(target.get('name'))
+    return bool(x and y and x==y)
+
+def recent(events, team, kickoff, league=None):
+    rows=[m for m in events if m.get('done') and when(m['date']) < kickoff
+          and (same_team(m['home'],team) or same_team(m['away'],team))
+          and isinstance(m['home'].get('score'),int) and isinstance(m['away'].get('score'),int)]
     return sorted(rows,key=lambda x:x['date'],reverse=True)[:10]
 
-def form(rows,team_id):
+def form(rows,team):
     gf=ga=w=d=l=0
     for m in rows:
-        ishome=m['home']['id']==team_id
+        ishome=same_team(m['home'],team)
         x=m['home']['score'] if ishome else m['away']['score']
         y=m['away']['score'] if ishome else m['home']['score']
         gf+=x;ga+=y
@@ -26,9 +43,9 @@ def form(rows,team_id):
     return {'w':w,'d':d,'l':l,'gf':round(gf/n,3),'ga':round(ga/n,3),'n':n}
 
 def calculate(match,events):
-    kick=when(match['date']); h=recent(events,match['home']['id'],kick); a=recent(events,match['away']['id'],kick)
+    kick=when(match['date']); h=recent(events,match['home'],kick); a=recent(events,match['away'],kick)
     if len(h)<5 or len(a)<5:return {'ready':False,'nh':len(h),'na':len(a)}
-    hf=form(h,match['home']['id']);af=form(a,match['away']['id'])
+    hf=form(h,match['home']);af=form(a,match['away'])
     lh=min(4.5,max(.15,(hf['gf']+af['ga'])/2*1.12));la=min(4.5,max(.15,(af['gf']+hf['ga'])/2*.9))
     p={k:0.0 for k in MARKETS};mass=0
     hp=[math.exp(-lh)];ap=[math.exp(-la)]
