@@ -7,9 +7,9 @@ MARKETS = ('home','draw','away','homeOrDraw','awayOrDraw','noDraw','over15','und
 def when(s):
     return datetime.fromisoformat(s.replace('Z','+00:00'))
 
-def recent(events, team_id, kickoff, league):
+def recent(events, team_id, kickoff, league=None):
     # No information from this fixture or later matches can enter a prediction.
-    rows=[m for m in events if m.get('done') and m.get('league')==league and when(m['date']) < kickoff and (m['home']['id']==team_id or m['away']['id']==team_id) and isinstance(m['home'].get('score'),int) and isinstance(m['away'].get('score'),int)]
+    rows=[m for m in events if m.get('done') and when(m['date']) < kickoff and (m['home']['id']==team_id or m['away']['id']==team_id) and isinstance(m['home'].get('score'),int) and isinstance(m['away'].get('score'),int)]
     return sorted(rows,key=lambda x:x['date'],reverse=True)[:10]
 
 def form(rows,team_id):
@@ -26,7 +26,7 @@ def form(rows,team_id):
     return {'w':w,'d':d,'l':l,'gf':round(gf/n,3),'ga':round(ga/n,3),'n':n}
 
 def calculate(match,events):
-    kick=when(match['date']); h=recent(events,match['home']['id'],kick,match['league']); a=recent(events,match['away']['id'],kick,match['league'])
+    kick=when(match['date']); h=recent(events,match['home']['id'],kick); a=recent(events,match['away']['id'],kick)
     if len(h)<5 or len(a)<5:return {'ready':False,'nh':len(h),'na':len(a)}
     hf=form(h,match['home']['id']);af=form(a,match['away']['id'])
     lh=min(4.5,max(.15,(hf['gf']+af['ga'])/2*1.12));la=min(4.5,max(.15,(af['gf']+hf['ga'])/2*.9))
@@ -48,7 +48,7 @@ def calculate(match,events):
             if j<2:p['awayUnder15']+=v
     for k in p:p[k]=p[k]/mass
     p['homeOrDraw']=p['home']+p['draw'];p['awayOrDraw']=p['away']+p['draw'];p['noDraw']=p['home']+p['away']
-    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v1'}
+    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v2-all-competitions'}
 
 def outcome(k,h,a):
     total=h+a
