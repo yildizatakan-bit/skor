@@ -2,6 +2,7 @@
 """Collect 7-day fixtures and past results; derive statistics locally in the PWA."""
 import datetime as dt
 import json
+import os
 import pathlib
 import time
 import urllib.error
@@ -10,6 +11,9 @@ import urllib.request
 from analysis_engine import calculate, settle_archive, metrics, when
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf']
+# Extra competitions are used ONLY for historical team form, not displayed as fixtures.
+# ESPN codes are unofficial; unsupported competitions are skipped gracefully.
+CUP_LEAGUES = ['tur.cup','eng.fa','eng.league_cup','esp.copa_del_rey','ger.dfb_pokal','ita.coppa_italia','fra.coupe_de_france']
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TODAY = dt.datetime.now(dt.timezone.utc).date()
 HISTORY_DAYS = 100
@@ -63,10 +67,17 @@ def main():
     # Fall back to single days only for windows that are rejected.
     first = TODAY - dt.timedelta(days=HISTORY_DAYS)
     last = TODAY + dt.timedelta(days=FUTURE_DAYS)
-    for league in LEAGUES:
+    full_refresh = os.environ.get('FULL_REFRESH', '1') == '1'
+    # Short refresh: only recently completed matches and upcoming fixtures.
+    # Historical results are retained from the prior snapshot; twice daily
+    # full scans restore coverage for missed updates and cup matches.
+    scan_first = first if full_refresh else TODAY - dt.timedelta(days=2)
+    scan_leagues = LEAGUES + CUP_LEAGUES if full_refresh else LEAGUES
+    print('Refresh mode:', 'full' if full_refresh else 'incremental', flush=True)
+    for league in scan_leagues:
         successful = 0
         failures = 0
-        day = first
+        day = scan_first
         while day <= last:
             end = min(day + dt.timedelta(days=2), last)
             try:
@@ -89,15 +100,17 @@ def main():
             day = end + dt.timedelta(days=1)
             time.sleep(0.05)
         print(f'{league}: {successful} successful windows/days, {failures} failed days', flush=True)
-        if failures:
+        if failures and league in LEAGUES:
             errors.append(f'{league}: {failures} gün sorgulanamadı')
+        elif failures and league in CUP_LEAGUES:
+            print(f'Optional cup {league}: {failures} dates unavailable (non-fatal)', flush=True)
     if not any(e.get('done') or e.get('date', '') >= TODAY.isoformat() for e in events.values()):
         raise RuntimeError('Veri alınamadı; önceki snapshot korunuyor')
     # Keep results for up to 100 days, fixtures for the next 7 days.
     lower = first.isoformat()
     upper = (last + dt.timedelta(days=1)).isoformat()
     selected = [e for e in events.values() if lower <= e.get('date', '') < upper and
-                (e.get('done') or e.get('date', '') >= TODAY.isoformat())]
+                (e.get('done') or (e['league'] in LEAGUES and e.get('date', '') >= TODAY.isoformat()))]
     now = dt.datetime.now(dt.timezone.utc)
     # Read immutable predictions from earlier successful runs. Never retroactively
     # create a prediction for a match that has already kicked off.
@@ -110,7 +123,7 @@ def main():
     by_id = {x['matchId'] for x in archive if isinstance(x, dict) and x.get('matchId')}
     analyses = {}
     for match in selected:
-        if match.get('done') or when(match['date']) <= now:
+        if match['league'] not in LEAGUES or match.get('done') or when(match['date']) <= now:
             continue
         result = calculate(match, selected)
         analyses[match['id']] = result
@@ -128,7 +141,7 @@ def main():
     payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                'events': sorted(selected, key=lambda e: e['date']),
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
-               'source': 'ESPN unofficial public scoreboards; probabilities computed locally'}
+               'source': 'ESPN unofficial public scoreboards; all-competition team history and probabilities computed locally'}
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')), 'utf-8')
     print(f'Saved {len(selected)} events; {sum(e["done"] for e in selected)} completed')
 
