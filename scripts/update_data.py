@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from analysis_engine import calculate, settle_archive, metrics, when
-from elo_engine import matchup
+from elo_engine import matchup, opponent_form_adjustment
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf']
 # Extra competitions are used ONLY for historical team form, not displayed as fixtures.
@@ -156,11 +156,11 @@ def main():
             continue
         fp = fingerprint(match)
         cached = previous_analyses.get(match['id'], {})
-        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v3-elo-history':
+        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v4-opponent-adjusted':
             result = cached
             cache_hits += 1
         else:
-            result = calculate(match, selected, matchup(selected, match))
+            result = calculate(match, selected, matchup(selected, match), opponent_form_adjustment(selected, match))
             result['historyFingerprint'] = fp
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}

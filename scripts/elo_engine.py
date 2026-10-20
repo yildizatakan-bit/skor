@@ -40,3 +40,34 @@ def matchup(events, match):
     return {'home': round(ratings.get(h, BASE), 1), 'away': round(ratings.get(a, BASE), 1),
             'homeMatches': counts.get(h, 0), 'awayMatches': counts.get(a, 0),
             'homeAdvantage': HOME_ADVANTAGE}
+
+
+def opponent_form_adjustment(events, match, ratings=None):
+    """Small, zero-centered goal-rate correction based on opponents' PRE-match Elo.
+
+    Opponent ratings are measured at each historical kickoff, not after the game.
+    The correction is shrunk for small samples and capped to prevent overconfidence.
+    This is heuristic, not a fitted or validated coefficient.
+    """
+    from analysis_engine import recent, same_team
+    kickoff = when(match['date'])
+    outputs = {}
+    for side in ('home', 'away'):
+        team = match[side]
+        rows = recent(events, team, kickoff)
+        if not rows:
+            outputs[side] = {'factor':1.0,'games':0,'avgOpponentElo':None}
+            continue
+        total = 0.0
+        for row in rows:
+            # Important: use the rating available BEFORE that past match.
+            old_ratings, _ = ratings_before(events, when(row['date']))
+            opponent = row['away'] if same_team(row['home'], team) else row['home']
+            total += old_ratings.get(team_key(opponent['name']), BASE)
+        avg = total / len(rows)
+        # 100 Elo points -> at most ~6% correction before shrinkage.
+        strength = max(-200.0, min(200.0, avg - BASE))
+        shrink = len(rows) / (len(rows) + 12.0)
+        factor = math.exp(strength / 1700.0 * shrink)
+        outputs[side] = {'factor':round(factor,5),'games':len(rows),'avgOpponentElo':round(avg,1)}
+    return outputs
