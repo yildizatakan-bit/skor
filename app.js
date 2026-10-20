@@ -52,7 +52,7 @@ function leagues(){return `<h1 class="heading">Ligler</h1><div class="leaguegrid
 function marketRow(m,group,name,k,p){let id=m.id+'|'+k,saved=state.favs.some(x=>x.id===id);return `<div class="marketrow"><div><b>${esc(name)}</b><div class="muted">${esc(group)}</div></div><span class="pct">%${percent(p)}</span><button class="star ${saved?'saved':''}" data-fav="${esc(id)}" aria-label="Favorilere ekle">${saved?'★':'☆'}</button></div>`}
 function detail(){let m=state.fixtures.find(x=>x.id===state.match);if(!m)return `<div class="empty">Maç bulunamadı.</div>`;m=fixture(m);let a=m.analysis;return `<button class="link" data-page="matches">‹ Maçlara dön</button><h1 class="heading">Maç Detayı</h1><div class="detailhero"><div class="muted" style="text-align:center">${esc(leagueName(m.league))} · ${m.live?'🔴 CANLI '+esc(m.clock||''):fmt(m.date)}</div><div class="versus"><div>${logo(m.home)}<b>${esc(m.home.name)}</b></div><strong>${m.live&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?m.home.score+' - '+m.away.score:'VS'}</strong><div>${logo(m.away)}<b>${esc(m.away.name)}</b></div></div>${a.ready?triple(a):''}${m.live?'<p class="muted">Canlı olasılıklar mevcut skora ve kalan süreye göre hesaplanır; uzatma ve kırmızı kart etkisi modele dahil değildir.</p>':''}</div>${!a.ready?`<div class="banner">Güvenilir analiz için en az 5 geçmiş maç gerekli. Bulunan: ${a.nh} / ${a.na}. Olasılık gösterilmiyor.</div>`:`<div class="sectionhead"><h2>${m.live?'Canlı maç sonucu olasılıkları':'Bahis türü olasılıkları'}</h2><span class="muted">Sadece ≥ %50</span></div><div class="chips">${[['all','Tümü'],...markets.map(([n])=>[n,n])].map(([k,n])=>`<button data-market="${esc(k)}" class="${state.market===k?'active':''}">${esc(n)}</button>`).join('')}</div>${markets.filter(([group])=>(!m.live||group===markets[0][0])&&(state.market==='all'||group===state.market)).map(([group,rows])=>{let visible=rows.filter(([,k])=>(!m.live||['home','draw','away'].includes(k))&&a.p[k]>=.5);return visible.length?`<section class="market"><h3>${esc(group)}</h3>${visible.map(([name,k])=>marketRow(m,group,name,k,a.p[k])).join('')}</section>`:''}).join('')}<h2 class="sectionhead">Son 10 Maç Formu (Tüm Kulvarlar)</h2><div class="stats"><div><small>${esc(m.home.name)}</small><b>${a.hf.w}G ${a.hf.d}B ${a.hf.l}M</b><small>Gol ort. ${a.hf.gf.toFixed(2)}</small></div><div><small>${esc(m.away.name)}</small><b>${a.af.w}G ${a.af.d}B ${a.af.l}M</b><small>Gol ort. ${a.af.gf.toFixed(2)}</small></div></div><p class="muted">Lig, UEFA ve veri kaynağında bulunan kupa maçları birlikte değerlendirilir. Beklenen gol: ${a.lh.toFixed(2)} – ${a.la.toFixed(2)}. Her takım için bulunan geçmiş maç sayısı: ${a.nh} / ${a.na}.</p>`}<p class="note">Bu değerler Poisson modeliyle hesaplanan tahmini olasılıklardır, iddaa.com bahis oranları değildir. Model tüm bahis türlerini kapsamaz; yalnızca hesaplayabildiği pazarlar listelenir. Sakatlık ve kadro etkileri modele dahil değildir.</p>`}
 function favorites(){let items=state.favs;return `<h1 class="heading">★ Favorilerim <span class="muted">(${items.length})</span></h1><p class="muted">Kaydettiğin maç ve tahminleri burada topluca görebilirsin. Yüzdeler son veri güncellemesindeki hesaplamaya göre değişebilir.</p>${items.length?items.map(f=>{let m=state.fixtures.find(x=>x.id===f.matchId);let a=m?fixture(m).analysis:null;let p=a?.ready?a.p[f.market]:f.p;return `<div class="card rowline"><div><b>${esc(f.home)} – ${esc(f.away)}</b><div class="muted">${esc(f.group)} · ${esc(f.name)}</div><small class="muted">${fmt(f.date)}</small></div><span class="pct" style="color:#70f4b5;font-weight:800">%${percent(p)}</span><button class="star saved" data-fav="${esc(f.id)}">★</button></div>`}).join(''):'<div class="empty">Henüz favorin yok. Maç detayında %50 üzerindeki bir tahminin yanındaki ☆ simgesine dokun.</div>'}`}
-function settings(){let v=state.validation;let rate=v?.primaryHitRate==null?'Henüz sonuç yok':'%'+Math.round(v.primaryHitRate*100);return `<h1 class="heading">Ayarlar</h1><div class="card"><b>Geçmiş tahminlerin başarısı</b><p class="muted">Maç başlamadan önce kaydedilmiş, sonradan sonuçlanmış ${v?.evaluatedPrimaryPredictions||0} maçta tek bir önceden seçilmiş tahmin: <strong>${rate}</strong></p><p class="note">Bu oran geçmiş sonuçları gösterir; gelecek maçlar için başarı garantisi değildir. Yeterli örnek birikene kadar dikkatli yorumlanmalıdır.</p></div><div class="card"><div><b>5 dakikada bir veri güncellemesi</b><div class="muted">GitHub Actions yaklaşık her 5 dakikada bir · kapsamlı tarama 08:00 ve 20:00</div></div></div><div class="card"><b>Son veri güncellemesi</b><p class="muted">${state.updated?new Date(state.updated).toLocaleString('tr-TR'):'Henüz başarılı güncelleme yok'}</p><button class="iconbtn" id="manual">Şimdi yenile ↻</button></div><div class="card"><b>Veri kaynağı</b><p class="muted">GitHub Actions tarafından hazırlanan data.json dosyası. Kaynak: ESPN kamuya açık futbol skorları uç noktaları (resmî üçüncü taraf API garantisi yoktur).</p></div><p class="note">GitHub Actions yapılandırıldığında veri dosyası uygulama kapalıyken de yaklaşık 5 dakikada bir güncellenir; telefon bildirimleri bu sürümde yoktur. Yerel favoriler bu cihazın tarayıcısında saklanır.</p>`}
+function settings(){let v=state.validation;let rate=v?.primaryHitRate==null?'Henüz sonuç yok':'%'+Math.round(v.primaryHitRate*100);return `<h1 class="heading">Ayarlar</h1><div class="card"><b>Geçmiş tahminlerin başarısı</b><p class="muted">Maç başlamadan önce kaydedilmiş, sonradan sonuçlanmış ${v?.evaluatedPrimaryPredictions||0} maçta tek bir önceden seçilmiş tahmin: <strong>${rate}</strong></p><p class="note">Bu oran geçmiş sonuçları gösterir; gelecek maçlar için başarı garantisi değildir. Yeterli örnek birikene kadar dikkatli yorumlanmalıdır.</p></div><div class="card"><div><b>5 dakikada bir veri güncellemesi</b><div class="muted">Kısa GitHub taraması yaklaşık 5 dakikada bir · geçmiş veri bir kez toplanır, yeni sonuçlar eklenir</div></div></div><div class="card"><b>Son veri güncellemesi</b><p class="muted">${state.updated?new Date(state.updated).toLocaleString('tr-TR'):'Henüz başarılı güncelleme yok'}</p><button class="iconbtn" id="manual">Şimdi yenile ↻</button></div><div class="card"><b>Veri kaynağı</b><p class="muted">GitHub Actions tarafından hazırlanan data.json dosyası. Kaynak: ESPN kamuya açık futbol skorları uç noktaları (resmî üçüncü taraf API garantisi yoktur).</p></div><p class="note">Canlı skorlar uygulama açıkken veri kaynağından yaklaşık 60 saniyede bir sorgulanır; erişim engellenirse son yayınlanan skor korunur; telefon bildirimleri bu sürümde yoktur. Yerel favoriler bu cihazın tarayıcısında saklanır.</p>`}
 function render(){let navPage=state.page==='detail'?'matches':state.page;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===navPage));$('content').innerHTML=({home,matches,leagues,favorites,settings,detail}[state.page]||home)();if(state.failures.length&&state.page==='settings')$('content').insertAdjacentHTML('beforeend',`<div class="banner">Erişim uyarıları: ${esc(state.failures.join(' | '))}</div>`)}
 async function load(force=false){
   if(state.loading)return;
@@ -87,9 +87,49 @@ document.addEventListener('click',e=>{let el=e.target.closest('button');if(!el)r
 document.addEventListener('change',e=>{if(e.target.id==='auto'){state.settings.auto=e.target.checked;save('settings',state.settings);render()}});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});init();
 
-// Refresh published snapshot while the app is open; browser may throttle background tabs.
+// Keep historical analysis in the GitHub snapshot; poll only today's scoreboard for live scores.
+// ESPN's unofficial endpoint may disallow browser CORS; in that case the published snapshot remains.
+let livePolling=false;
+async function pollLive(){
+  if(document.hidden||livePolling||!state.fixtures.length)return;
+  livePolling=true;
+  try{
+    const today=new Date(),yesterday=new Date(today.getTime()-86400000);
+    const dates=[dateKey(yesterday),dateKey(today)];
+    const updates=await Promise.allSettled(LEAGUES.map(async ([league])=>{
+      const url=BASE+encodeURIComponent(league)+'/scoreboard?dates='+dates.join('-')+'&limit=200';
+      const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),9000);
+      try{
+        const response=await fetch(url,{cache:'no-store',signal:ctl.signal});
+        if(!response.ok)throw Error('HTTP '+response.status);
+        const payload=await response.json();
+        return (payload.events||[]).map(e=>{
+          const comp=e.competitions?.[0],home=comp?.competitors?.find(x=>x.homeAway==='home'),away=comp?.competitors?.find(x=>x.homeAway==='away');
+          const type=e.status?.type||{},live=type.state==='in'&&!type.completed;
+          const done=type.completed===true;
+          if(!home||!away)return null;
+          const score=x=>x?.score!==undefined&&x.score!==null&&String(x.score).trim()!==''&&Number.isFinite(Number(x.score))?Number(x.score):null;
+          return {id:league+':'+e.id,live,done,clock:String(e.status?.displayClock||''),hs:score(home),as:score(away)};
+        }).filter(Boolean);
+      }finally{clearTimeout(timer)}
+    }));
+    const map=new Map(updates.filter(x=>x.status==='fulfilled').flatMap(x=>x.value).map(x=>[x.id,x]));
+    let changed=false;
+    for(const m of state.fixtures){
+      const v=map.get(m.id);if(!v)continue;
+      const newLive=v.live,clock=v.clock,hs=(v.live||v.done)?v.hs:null,as=(v.live||v.done)?v.as:null;
+      if(m.live!==newLive||m.clock!==clock||m.home.score!==hs||m.away.score!==as){
+        m.live=newLive;m.clock=clock;m.home.score=hs;m.away.score=as;changed=true;
+      }
+      if(v.done){m.done=true;changed=true}
+    }
+    if(changed){state.fixtures=state.fixtures.filter(m=>!m.done);render()}
+  }catch(e){/* Preserve the last published snapshot when the live source is unavailable. */}
+  finally{livePolling=false}
+}
+setInterval(()=>{if(!document.hidden)pollLive()},60*1000);
 setInterval(()=>{if(!document.hidden)load()},5*60*1000);
-document.addEventListener("visibilitychange",()=>{if(!document.hidden&&(!state.updated||Date.now()-state.updated>5*60*1000))load()});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){pollLive();if(!state.updated||Date.now()-state.updated>5*60*1000)load()}});
 
 // Swipe between featured matches on touch screens.
 let touchStartX=null;document.addEventListener('touchstart',e=>{if(e.target.closest('#featured-slide'))touchStartX=e.changedTouches[0].screenX},{passive:true});document.addEventListener('touchend',e=>{if(touchStartX===null)return;const delta=e.changedTouches[0].screenX-touchStartX;touchStartX=null;if(Math.abs(delta)<45||state.page!=='home'||featuredMatches().length<2)return;state.slide+=delta<0?1:-1;render()},{passive:true});

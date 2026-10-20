@@ -76,7 +76,7 @@ def main():
     # Historical results are retained from the prior snapshot; twice daily
     # full scans restore coverage for missed updates and cup matches.
     scan_first = first if full_refresh else TODAY - dt.timedelta(days=2)
-    scan_leagues = LEAGUES + CUP_LEAGUES if full_refresh else LEAGUES
+    scan_leagues = LEAGUES + CUP_LEAGUES
     print('Refresh mode:', 'full' if full_refresh else 'incremental', flush=True)
     for league in scan_leagues:
         successful = 0
@@ -125,12 +125,35 @@ def main():
     except (OSError, ValueError, TypeError):
         archive = []
     by_id = {x['matchId'] for x in archive if isinstance(x, dict) and x.get('matchId')}
+    # Reuse previous probabilities when neither team's latest results have changed.
+    previous_analyses = {}
+    if path.exists():
+        try:
+            previous_analyses = json.loads(path.read_text('utf-8')).get('analyses', {})
+        except (ValueError, OSError, TypeError):
+            pass
+    from analysis_engine import recent
+    def fingerprint(match):
+        kick = when(match['date'])
+        parts = []
+        for side in ('home', 'away'):
+            parts.append([(r['id'], r['home']['score'], r['away']['score'])
+                          for r in recent(selected, match[side], kick)])
+        return json.dumps(parts, separators=(',', ':'))
     analyses = {}
     diagnostics = {}
+    cache_hits = 0
     for match in selected:
         if match['league'] not in LEAGUES or match.get('done') or (when(match['date']) <= now and not match.get('live')):
             continue
-        result = calculate(match, selected)
+        fp = fingerprint(match)
+        cached = previous_analyses.get(match['id'], {})
+        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v2-all-competitions':
+            result = cached
+            cache_hits += 1
+        else:
+            result = calculate(match, selected)
+            result['historyFingerprint'] = fp
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
         if result['ready'] and not match.get('live') and match['id'] not in by_id:
@@ -149,6 +172,7 @@ def main():
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
                'source': 'ESPN unofficial public scoreboards; all-competition team history and probabilities computed locally'}
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')), 'utf-8')
+    print(f'Reused {cache_hits} unchanged analyses', flush=True)
     print(f'Saved {len(selected)} events; {sum(e["done"] for e in selected)} completed')
     print(f'Analysis ready: {sum(x["ready"] for x in diagnostics.values())}/{len(diagnostics)}', flush=True)
     for x in diagnostics.values():
