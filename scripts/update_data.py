@@ -21,7 +21,7 @@ def main():
     end=(today+datetime.timedelta(days=30)).strftime('%Y%m%d')
     events={}; errors=[]
     for league in LEAGUES:
-        url=f'https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={start}-{end}&limit=1000'
+        url=f'https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={today.strftime("%Y%m%d")}'
         try:
             req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 MaçAnalizPro/4.0','Accept':'application/json'})
             with urllib.request.urlopen(req,timeout=25) as r: raw=json.load(r)
