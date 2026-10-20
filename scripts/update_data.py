@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from analysis_engine import calculate, settle_archive, metrics, when
+from elo_engine import matchup
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf']
 # Extra competitions are used ONLY for historical team form, not displayed as fixtures.
@@ -71,7 +72,7 @@ def main():
     # Fall back to single days only for windows that are rejected.
     first = TODAY - dt.timedelta(days=HISTORY_DAYS)
     last = TODAY + dt.timedelta(days=FUTURE_DAYS)
-    full_refresh = os.environ.get('FULL_REFRESH', '1') == '1'
+    full_refresh = os.environ.get('FULL_REFRESH', '0') == '1'
     # Short refresh: only recently completed matches and upcoming fixtures.
     # Historical results are retained from the prior snapshot; twice daily
     # full scans restore coverage for missed updates and cup matches.
@@ -110,8 +111,8 @@ def main():
             print(f'Optional cup {league}: {failures} dates unavailable (non-fatal)', flush=True)
     if not any(e.get('done') or e.get('date', '') >= TODAY.isoformat() for e in events.values()):
         raise RuntimeError('Veri alınamadı; önceki snapshot korunuyor')
-    # Keep results for up to 100 days, fixtures for the next 7 days.
-    lower = first.isoformat()
+    # Preserve all previously collected final scores; never discard old history.
+    lower = '1900-01-01'
     upper = (last + dt.timedelta(days=1)).isoformat()
     selected = [e for e in events.values() if lower <= e.get('date', '') < upper and
                 (e.get('done') or (e['league'] in LEAGUES and e.get('date', '') >= TODAY.isoformat()))]
@@ -139,7 +140,14 @@ def main():
         for side in ('home', 'away'):
             parts.append([(r['id'], r['home']['score'], r['away']['score'])
                           for r in recent(selected, match[side], kick)])
-        return json.dumps(parts, separators=(',', ':'))
+        # Elo depends on the wider completed-match pool, not just last 10 games.
+        # A changed result anywhere in the archive invalidates this cache.
+        return json.dumps([parts, history_version], separators=(',', ':'))
+    import hashlib
+    final_rows = sorted((e['id'], e['date'], e['home']['score'], e['away']['score'])
+                        for e in selected if e.get('done') and isinstance(e['home'].get('score'),int)
+                        and isinstance(e['away'].get('score'),int))
+    history_version = hashlib.sha256(json.dumps(final_rows, separators=(',', ':')).encode()).hexdigest()[:16]
     analyses = {}
     diagnostics = {}
     cache_hits = 0
@@ -148,11 +156,11 @@ def main():
             continue
         fp = fingerprint(match)
         cached = previous_analyses.get(match['id'], {})
-        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v2-all-competitions':
+        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v3-elo-history':
             result = cached
             cache_hits += 1
         else:
-            result = calculate(match, selected)
+            result = calculate(match, selected, matchup(selected, match))
             result['historyFingerprint'] = fp
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
@@ -170,7 +178,7 @@ def main():
     payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                'events': sorted(selected, key=lambda e: e['date']), 'diagnostics': diagnostics,
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
-               'source': 'ESPN unofficial public scoreboards; all-competition team history and probabilities computed locally'}
+               'source': 'ESPN unofficial public scoreboards; historical results, Elo and Poisson model computed in GitHub Actions'}
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')), 'utf-8')
     print(f'Reused {cache_hits} unchanged analyses', flush=True)
     print(f'Saved {len(selected)} events; {sum(e["done"] for e in selected)} completed')

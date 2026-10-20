@@ -60,11 +60,18 @@ def form(rows,team):
     n=len(rows)
     return {'w':w,'d':d,'l':l,'gf':round(gf/n,3),'ga':round(ga/n,3),'n':n}
 
-def calculate(match,events):
+def calculate(match,events,elo=None):
     kick=when(match['date']); h=recent(events,match['home'],kick); a=recent(events,match['away'],kick)
     if len(h)<5 or len(a)<5:return {'ready':False,'nh':len(h),'na':len(a)}
     hf=form(h,match['home']);af=form(a,match['away'])
     lh=min(4.5,max(.15,(hf['gf']+af['ga'])/2*1.12));la=min(4.5,max(.15,(af['gf']+hf['ga'])/2*.9))
+    # Elo adjustment is deliberately conservative; incomplete history must not
+    # be interpreted as certainty about team strength.
+    if elo and min(elo.get('homeMatches',0),elo.get('awayMatches',0)) >= 5:
+        delta=max(-350,min(350,elo['home']-elo['away']))
+        factor=math.exp(delta / 1000.0)
+        lh=min(4.5,max(.15,lh*factor))
+        la=min(4.5,max(.15,la/factor))
     p={k:0.0 for k in MARKETS};mass=0
     hp=[math.exp(-lh)];ap=[math.exp(-la)]
     for i in range(1,16):hp.append(hp[-1]*lh/i);ap.append(ap[-1]*la/i)
@@ -83,7 +90,7 @@ def calculate(match,events):
             if j<2:p['awayUnder15']+=v
     for k in p:p[k]=p[k]/mass
     p['homeOrDraw']=p['home']+p['draw'];p['awayOrDraw']=p['away']+p['draw'];p['noDraw']=p['home']+p['away']
-    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v2-all-competitions'}
+    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v3-elo-history','elo':elo}
 
 def outcome(k,h,a):
     total=h+a
