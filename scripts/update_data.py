@@ -176,7 +176,7 @@ def main():
     archive = sorted(archive,key=lambda x:x['kickoff'])[-2000:]
     archive_path.write_text(json.dumps({'predictions':archive},ensure_ascii=False,separators=(',',':')),encoding='utf-8')
     payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
-               'events': sorted(selected, key=lambda e: e['date']), 'diagnostics': diagnostics,
+               'events': sorted(selected, key=lambda e: e['date']), 'predictionArchive': [r for r in archive if r.get('league') in LEAGUES and r.get('p')], 'diagnostics': diagnostics,
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
                'source': 'ESPN unofficial public scoreboards; historical results, Elo and Poisson model computed in GitHub Actions'}
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')), 'utf-8')
