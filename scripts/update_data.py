@@ -451,6 +451,12 @@ def main():
         else:
             result = calculate(match, selected)
             result['historyFingerprint'] = fp
+        # v25: Never publish a prediction unless both sides have ten verified
+        # completed matches strictly before kickoff. Keep collecting history.
+        if result.get('nh', 0) < 10 or result.get('na', 0) < 10:
+            result = dict(result)
+            result['ready'] = False
+            result.pop('p', None)
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
         if result['ready'] and not match.get('live') and match['id'] not in by_id:
