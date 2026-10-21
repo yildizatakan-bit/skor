@@ -59,19 +59,60 @@ def request(league, start, end=None):
 
 
 def team_schedule(league, team_id, season):
-    """ESPN team schedule, scoped to a competition and season.
+    """Read ESPN team schedule and return parsed events plus diagnostics.
 
-    ESPN team identifiers are NOT treated as globally unique.
+    A 200 response with zero events is not evidence of an available history.
     """
-    url = ("https://site.api.espn.com/apis/site/v2/sports/soccer/"
-           + urllib.parse.quote(league, safe='') + '/teams/'
-           + urllib.parse.quote(str(team_id), safe='') + '/schedule?'
-           + urllib.parse.urlencode({'season': season, 'limit': 150}))
+    base = ('https://site.api.espn.com/apis/site/v2/sports/soccer/'
+            + urllib.parse.quote(league, safe='') + '/teams/'
+            + urllib.parse.quote(str(team_id), safe='') + '/schedule')
+    url = base + '?' + urllib.parse.urlencode({'season': season, 'limit': 500})
     req = urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0', 'Accept':'application/json'})
-    with urllib.request.urlopen(req, timeout=12) as response:
+    with urllib.request.urlopen(req, timeout=15) as response:
         payload = json.load(response)
-    return [m for e in payload.get('events', [])
-            if (m := parse_event(e, league)) is not None]
+    raw = payload.get('events') or []
+    return [m for e in raw if (m := parse_event(e, league)) is not None], len(raw), list(payload)[:8]
+
+
+def merge_events(events, rows):
+    added = 0
+    for m in rows:
+        old = events.get(m['id'])
+        if old is None or (m.get('done') and not old.get('done')):
+            events[m['id']] = m
+            if m.get('done') and not (old or {}).get('done'):
+                added += 1
+    return added
+
+
+def targeted_scoreboard_history(league, team_id, kickoff, events, target=10):
+    """Fallback when ESPN team schedules are empty: scan league scoreboard.
+
+    Keep requests bounded and stop when ten completed games are found for
+    the exact competition-scoped ESPN team ID. This is a *fallback*, not
+    proof that all competitions for the club have been discovered.
+    """
+    end = min(TODAY, kickoff.date() - dt.timedelta(days=1))
+    found = 0
+    failed = 0
+    added = 0
+    # Six 30-day windows = 180 days; future runs may revisit older seasons.
+    for offset in range(0, 180, 30):
+        hi = end - dt.timedelta(days=offset)
+        lo = hi - dt.timedelta(days=29)
+        try:
+            rows = request(league, lo, hi)
+            found += sum(1 for m in rows if m.get('done') and
+                         (m['home']['id'] == str(team_id) or m['away']['id'] == str(team_id)))
+            added += merge_events(events, rows)
+        except Exception:
+            failed += 1
+        n = sum(1 for m in events.values() if m.get('done') and
+                m['league'] == league and when(m['date']) < kickoff and
+                (m['home']['id'] == str(team_id) or m['away']['id'] == str(team_id)))
+        if n >= target:
+            break
+    return added, found, failed
 
 
 def fill_team_gaps(db, events, competition_codes):
@@ -111,7 +152,7 @@ def fill_team_gaps(db, events, competition_codes):
     print(f'TEAM BACKFILL: {len(candidates)} teams in fixture window, '
           f'{len(todo)} below ten, checking {len(selected)}', flush=True)
     for _, before, key, item, attempts in selected:
-        team=item['team']; added=0; successful=0; errors=[]
+        team=item['team']; added=0; successful=0; errors=[]; raw_events=0; fallback_calls=0; fallback_found=0
         # The source fixture's competition is the only safe place to reuse its ESPN team id.
         # Additional leagues are discovered via matching team names from known events.
         sources=[]
@@ -129,15 +170,21 @@ def fill_team_gaps(db, events, competition_codes):
             if league not in competition_codes:continue
             for season in (TODAY.year, TODAY.year-1):
                 try:
-                    rows=team_schedule(league,tid,season)
+                    rows, raw_count, keys = team_schedule(league,tid,season)
                     successful+=1
-                    for m in rows:
-                        if m.get('done') and (not events.get(m['id'],{}).get('done')):
-                            events[m['id']]=m;added+=1
-                        elif m['id'] not in events:
-                            events[m['id']]=m
+                    raw_events+=raw_count
+                    added+=merge_events(events,rows)
+                    if raw_count == 0 and attempts == 0:
+                        print(f'  EMPTY SCHEDULE {league}/{tid}/{season}; response keys={keys}',flush=True)
                 except Exception as exc:
                     errors.append(f'{league}/{season}: {type(exc).__name__}')
+            # ESPN may return HTTP 200 with an empty team schedule.
+            # Use the same competition scoreboard as a bounded fallback.
+            if len(recent(list(events.values()),team,item['kickoff']))<10 and raw_events == 0:
+                nadd, nfound, nfailed = targeted_scoreboard_history(
+                    league,tid,item['kickoff'],events)
+                added+=nadd; fallback_calls+=1; fallback_found+=nfound
+                if nfailed: errors.append(f'{league}: {nfailed} scoreboard windows failed')
             if len(recent(list(events.values()),team,item['kickoff']))>=10:break
         after=len(recent(list(events.values()),team,item['kickoff']))
         db.execute('INSERT INTO team_backfill(team_key,last_checked,attempts) VALUES(?,?,?) '
@@ -145,7 +192,7 @@ def fill_team_gaps(db, events, competition_codes):
                    'attempts=excluded.attempts',
                    (key,now.isoformat(),attempts+1))
         print(f'TEAM {team["name"]}: {before}-> {after}/10; new finals={added}; '
-              f'schedule calls ok={successful}; failures={len(errors)}'
+              f'schedule calls ok={successful}; raw events={raw_events}; fallback leagues={fallback_calls}; fallback team matches={fallback_found}; failures={len(errors)}'
               + (f' ({", ".join(errors[:2])})' if errors else ''),flush=True)
     db.commit()
 
