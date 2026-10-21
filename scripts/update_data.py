@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from analysis_engine import calculate, settle_archive, metrics, when
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','ned.1','eng.2','uefa.champions','uefa.europa','uefa.europa.conf','fifa.world','uefa.euro','uefa.nations','conmebol.america','concacaf.gold.cup','afc.asian.cup','caf.nations']
@@ -115,6 +116,84 @@ def targeted_scoreboard_history(league, team_id, kickoff, events, target=10):
     return added, found, failed
 
 
+# Domestic competitions for clubs appearing in European fixtures. Extend this
+# mapping as new clubs are encountered; an unverified league is never guessed.
+DOMESTIC_CLUBS = {
+    'den.1': 'FC København|FC Midtjylland|FC Nordsjælland|AGF|Brøndby|Randers',
+    'sco.1': 'Celtic|Rangers|Heart of Midlothian|Hibernian|Aberdeen',
+    'ukr.1': 'Shakhtar Donetsk|Dynamo Kyiv',
+    'nor.1': 'Viking FK|SK Brann|Lillestrom|Bodø/Glimt|Molde',
+    'bel.1': 'Club Brugge|KAA Gent|Union St.-Gilloise|Anderlecht|Genk',
+    'gre.1': 'Panathinaikos|Olympiacos|PAOK|AEK Athens|OFI Crete',
+    'aut.1': 'SK Sturm Graz|RB Salzburg|LASK Linz',
+    'sui.1': 'FC Lugano|FC Thun|Young Boys|Basel',
+    'cro.1': 'Dinamo Zagreb|Hajduk Split',
+    'cze.1': 'Sparta Prague|Jablonec|Viktoria Plzen|Slavia Prague',
+    'pol.1': 'Lech Poznan|Jagiellonia Bialystok|Legia Warsaw',
+    'hun.1': 'Ferencvaros',
+    'srb.1': 'Red Star Belgrade|Partizan',
+    'cyp.1': 'Omonia Nicosia|Pafos|APOEL',
+    'bul.1': 'CSKA Sofia|Levski Sofia|Ludogorets',
+    'rou.1': 'CSU Craiova|FCSB|CFR Cluj',
+    'svk.1': 'Slovan Bratislava',
+    'swe.1': 'Mjällby AIF|Malmö FF|AIK',
+    'irl.1': 'Shamrock Rovers',
+    'isr.1': "Hapoel Be'er|Maccabi Tel Aviv|Maccabi Haifa",
+    'kaz.1': 'Kairat Almaty|Astana',
+    'fin.1': 'KuPS Kuopio|HJK Helsinki',
+    'svn.1': 'NK Celje|Maribor',
+    'arm.1': 'Ararat-Armenia',
+    'geo.1': 'Iberia 1999',
+    'and.1': "Inter D'Escaldes",
+    'gib.1': 'Lincoln Red Imps',
+    'alb.1': 'Egnatia',
+    'lat.1': 'Riga FC',
+    'ltu.1': 'Kauno Zalgiris',
+    'bih.1': 'Borac Banja Luka',
+}
+
+def normalized_name(name):
+    name = unicodedata.normalize('NFKD', str(name or '')).casefold()
+    return ''.join(c for c in name if c.isalnum() and not unicodedata.combining(c))
+
+DOMESTIC_BY_NAME = {normalized_name(name): league
+                    for league, names in DOMESTIC_CLUBS.items()
+                    for name in names.split('|')}
+
+def domestic_history(name, kickoff, cache):
+    """Look up a club by *name* in its domestic competition's scoreboards.
+
+    ESPN team ids are competition-scoped. Never reuse a European competition id
+    in a domestic league. Scan the league, match the club name, and preserve
+    all completed events, which may also help its domestic opponents.
+    """
+    league = DOMESTIC_BY_NAME.get(normalized_name(name))
+    if not league:
+        return None, [], 0
+    end = min(TODAY, kickoff.date() - dt.timedelta(days=1))
+    rows = []
+    failed = 0
+    for offset in range(0, 120, 14):
+        hi = end - dt.timedelta(days=offset)
+        lo = hi - dt.timedelta(days=13)
+        key = (league, lo, hi)
+        if key not in cache:
+            try:
+                cache[key] = (request(league, lo, hi), False)
+            except Exception:
+                cache[key] = ([], True)
+        batch, error = cache[key]
+        failed += int(error)
+        rows.extend(batch)
+        matches = [m for m in rows if m.get('done') and
+                   any(normalized_name(m[side]['name']) == normalized_name(name)
+                       for side in ('home','away'))]
+        if len(matches) >= 10:
+            break
+    # Store all verified results for the league, not just one team.
+    return league, rows, failed
+
+
 def fill_team_gaps(db, events, competition_codes):
     """Target teams with fewer than ten finished games, without deleting old rows.
 
@@ -151,6 +230,7 @@ def fill_team_gaps(db, events, competition_codes):
     selected=todo[:limit]
     print(f'TEAM BACKFILL: {len(candidates)} teams in fixture window, '
           f'{len(todo)} below ten, checking {len(selected)}', flush=True)
+    domestic_cache = {}
     for _, before, key, item, attempts in selected:
         team=item['team']; added=0; successful=0; errors=[]; raw_events=0; fallback_calls=0; fallback_found=0
         # The source fixture's competition is the only safe place to reuse its ESPN team id.
@@ -186,13 +266,25 @@ def fill_team_gaps(db, events, competition_codes):
                 added+=nadd; fallback_calls+=1; fallback_found+=nfound
                 if nfailed: errors.append(f'{league}: {nfailed} scoreboard windows failed')
             if len(recent(list(events.values()),team,item['kickoff']))>=10:break
+        domestic_league = None
+        domestic_matches = 0
+        if len(recent(list(events.values()), team, item['kickoff'])) < 10:
+            domestic_league, domestic_rows, domestic_failures = domestic_history(
+                team['name'], item['kickoff'], domestic_cache)
+            if domestic_league:
+                domestic_matches = sum(1 for m in domestic_rows if m.get('done') and
+                    any(normalized_name(m[side]['name']) == normalized_name(team['name'])
+                        for side in ('home','away')))
+                added += merge_events(events, domestic_rows)
+                if domestic_failures:
+                    errors.append(f'{domestic_league}: {domestic_failures} domestic windows failed')
         after=len(recent(list(events.values()),team,item['kickoff']))
         db.execute('INSERT INTO team_backfill(team_key,last_checked,attempts) VALUES(?,?,?) '
                    'ON CONFLICT(team_key) DO UPDATE SET last_checked=excluded.last_checked,'
                    'attempts=excluded.attempts',
                    (key,now.isoformat(),attempts+1))
         print(f'TEAM {team["name"]}: {before}-> {after}/10; new finals={added}; '
-              f'schedule calls ok={successful}; raw events={raw_events}; fallback leagues={fallback_calls}; fallback team matches={fallback_found}; failures={len(errors)}'
+              f'schedule calls ok={successful}; raw events={raw_events}; fallback leagues={fallback_calls}; fallback team matches={fallback_found}; domestic={domestic_league or "unmapped"}; domestic matches={domestic_matches}; failures={len(errors)}'
               + (f' ({", ".join(errors[:2])})' if errors else ''),flush=True)
     db.commit()
 
