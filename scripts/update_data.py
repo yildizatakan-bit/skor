@@ -74,60 +74,83 @@ def main():
         try:
             old = json.loads(payload)
             if old.get('id') and old.get('done'):
-                previous.setdefault(old['id'], old)
+                previous[old['id']] = old if not previous.get(old['id'], {}).get('done') else previous[old['id']]
         except (ValueError, TypeError):
             continue
     events = dict(previous)
     errors = []
-    # Use short windows to avoid the HTTP 400 produced by a 165-day request.
-    # Fall back to single days only for windows that are rejected.
+    # Fetch recent results for every competition, then progressively backfill
+    # ALL competitions instead of spending an entire run on a single league.
     first = TODAY - dt.timedelta(days=HISTORY_DAYS)
     last = TODAY + dt.timedelta(days=FUTURE_DAYS)
-    # Historical seeding is incremental: at most one unseeded competition per run.
-    seed_batch = max(0, int(os.environ.get('SEED_BATCH', '1')))
-    unseeded_batch = set([x for x in list(dict.fromkeys(LEAGUES + CUP_LEAGUES)) if x not in {r[0] for r in db.execute('SELECT league FROM seeded_leagues') }][:seed_batch])
-    # Short refresh: only recently completed matches and upcoming fixtures.
-    # Historical results are retained from the prior snapshot; twice daily
-    # full scans restore coverage for missed updates and cup matches.
     scan_leagues = list(dict.fromkeys(LEAGUES + CUP_LEAGUES))
-    seeded = {r[0] for r in db.execute('SELECT league FROM seeded_leagues')}
-    # Newly added leagues get a one-time historical import; others only a short delta.
-    scan_first = TODAY - dt.timedelta(days=2)
-    print('Historical seed batch:', sorted(unseeded_batch), flush=True)
+    db.execute('CREATE TABLE IF NOT EXISTS backfill_progress (league TEXT PRIMARY KEY, next_end TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0)')
+    db.commit()
+
+    def fetch_range(league, start, end):
+        """Try a 14-day window; recursively split on endpoint errors.
+        A failed day is logged but does not erase previously saved matches.
+        """
+        try:
+            return request(league, start, end), 0
+        except Exception as exc:
+            if start == end:
+                errors.append(f'{league} {start}: {type(exc).__name__}: {exc}')
+                return [], 1
+            middle = start + dt.timedelta(days=(end-start).days // 2)
+            left, nf1 = fetch_range(league, start, middle)
+            right, nf2 = fetch_range(league, middle + dt.timedelta(days=1), end)
+            return left + right, nf1 + nf2
+
+    # Short refresh is cheap and keeps scores/fixtures current.
     for league in scan_leagues:
-        successful = 0
+        rows, failures = fetch_range(league, TODAY - dt.timedelta(days=3), last)
+        for e in rows:
+            events[e['id']] = e if not (events.get(e['id'], {}).get('done') and not e.get('done')) else events[e['id']]
+        print(f'{league}: recent {len(rows)} events, {failures} unavailable days', flush=True)
+
+    # A bounded historical slice per competition each run. All leagues progress
+    # together, including club cups and international competitions used for form.
+    # A 90-day slice is enough to reach ten games for most active teams quickly.
+    batch = max(1, int(os.environ.get('SEED_BATCH', '6')))
+    slice_days = max(14, int(os.environ.get('SEED_DAYS', '90')))
+    incomplete = []
+    for league in scan_leagues:
+        row = db.execute('SELECT next_end,completed FROM backfill_progress WHERE league=?', (league,)).fetchone()
+        if row is None:
+            incomplete.append((league, TODAY - dt.timedelta(days=4)))
+        elif not row[1]:
+            incomplete.append((league, dt.date.fromisoformat(row[0])))
+    # Rotate between competitions on successive runs; never repeatedly restart
+    # the Turkish league after one isolated ESPN failure.
+    chosen = incomplete[:batch]
+    print('Historical backfill batch:', [x[0] for x in chosen], flush=True)
+    for league, end_date in chosen:
+        start_date = max(first, end_date - dt.timedelta(days=slice_days-1))
+        found = []
         failures = 0
-        day = first if league in unseeded_batch else scan_first
-        while day <= last:
-            end = min(day + dt.timedelta(days=2), last)
-            try:
-                found = request(league, day, end)
-                for e in found:
-                    events[e['id']] = e
-                successful += 1
-            except Exception as exc:
-                # ESPN's unofficial endpoint may reject date ranges.
-                for offset in range((end-day).days + 1):
-                    d = day + dt.timedelta(days=offset)
-                    try:
-                        for e in request(league, d):
-                            events[e['id']] = e
-                        successful += 1
-                    except Exception as single_exc:
-                        failures += 1
-                        if failures <= 2:
-                            errors.append(f'{league} {d}: {type(single_exc).__name__}: {single_exc}')
-            day = end + dt.timedelta(days=1)
-            time.sleep(0.05)
-        print(f'{league}: {successful} successful windows/days, {failures} failed days', flush=True)
-        # Mark seeded only if the historical scan completed without gaps.
-        if league in unseeded_batch and failures == 0 and successful:
-            db.execute('INSERT OR REPLACE INTO seeded_leagues VALUES (?,?)', (league, dt.datetime.now(dt.timezone.utc).isoformat()))
-            db.commit()
-        if failures and league in LEAGUES:
-            errors.append(f'{league}: {failures} gün sorgulanamadı')
-        elif failures and league in CUP_LEAGUES:
-            print(f'Optional cup {league}: {failures} dates unavailable (non-fatal)', flush=True)
+        day = start_date
+        while day <= end_date:
+            chunk_end = min(end_date, day + dt.timedelta(days=13))
+            rows, failed = fetch_range(league, day, chunk_end)
+            found.extend(rows)
+            failures += failed
+            day = chunk_end + dt.timedelta(days=1)
+        for e in found:
+            events[e['id']] = e if not (events.get(e['id'], {}).get('done') and not e.get('done')) else events[e['id']]
+        finished = start_date <= first
+        next_end = (start_date - dt.timedelta(days=1)).isoformat()
+        db.execute('INSERT INTO backfill_progress(league,next_end,completed) VALUES(?,?,?) '
+                   'ON CONFLICT(league) DO UPDATE SET next_end=excluded.next_end,completed=excluded.completed',
+                   (league, next_end, int(finished)))
+        if finished:
+            db.execute('INSERT OR REPLACE INTO seeded_leagues VALUES (?,?)',
+                       (league, dt.datetime.now(dt.timezone.utc).isoformat()))
+        db.commit()
+        print(f'BACKFILL {league}: {start_date}..{end_date}; {len(found)} events; '
+              f'{failures} unavailable days; complete={finished}', flush=True)
+    print(f'Historical progress: {db.execute("SELECT COUNT(*) FROM backfill_progress WHERE completed=1").fetchone()[0]}'
+          f'/{len(scan_leagues)} competitions fully scanned', flush=True)
     # Upsert only observed fixtures; never remove prior completed matches.
     for event in events.values():
         if not event.get('id') or not event.get('date'):
