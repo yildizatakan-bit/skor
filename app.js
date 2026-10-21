@@ -1,5 +1,5 @@
 'use strict';
-const LEAGUES=[['tur.1','Süper Lig','🇹🇷'],['eng.1','Premier League','🏴'],['esp.1','La Liga','🇪🇸'],['ger.1','Bundesliga','🇩🇪'],['ita.1','Serie A','🇮🇹'],['fra.1','Ligue 1','🇫🇷'],['uefa.champions','Şampiyonlar Ligi','🏆'],['uefa.europa','Avrupa Ligi','🏅'],['uefa.europa.conf','Konferans Ligi','🥇']];
+const LEAGUES=[['tur.1','Süper Lig','🇹🇷'],['eng.1','Premier League','🏴'],['esp.1','La Liga','🇪🇸'],['ger.1','Bundesliga','🇩🇪'],['ita.1','Serie A','🇮🇹'],['fra.1','Ligue 1','🇫🇷'],['uefa.champions','Şampiyonlar Ligi','🏆'],['uefa.europa','Avrupa Ligi','🏅'],['uefa.europa.conf','Konferans Ligi','🥇'],['ned.1','Eredivisie','🇳🇱'],['eng.2','Championship','🏴'],['fifa.world','Dünya Kupası','🌍'],['uefa.euro','Avrupa Şampiyonası','🇪🇺'],['uefa.nations','Uluslar Ligi','🌍'],['conmebol.america','Copa América','🌎'],['concacaf.gold.cup','Gold Cup','🌎'],['afc.asian.cup','Asya Kupası','🌏'],['caf.nations','Afrika Uluslar Kupası','🌍']];
 const BASE='https://site.api.espn.com/apis/site/v2/sports/soccer/';const $=id=>document.getElementById(id);const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const key='map-v3-';const FINISHED_WINDOW=2*60*60*1000;const finishedTimes=read('finishedTimes',{});function finishedAt(m,now=Date.now()){if(!m.done)return null;const kickoff=Date.parse(m.date);if(!Number.isFinite(kickoff)||kickoff>now||now-kickoff>6*60*60*1000)return null;return Number(finishedTimes[m.id])||kickoff+2*60*60*1000}function retainFinished(m,now=Date.now()){const end=finishedAt(m,now);return m.done&&end!==null&&now>=end&&now-end<FINISHED_WINDOW}function recordFinished(m,now=Date.now()){if(!finishedTimes[m.id]){finishedTimes[m.id]=now;save('finishedTimes',finishedTimes)}}const state={archive:[],page:'home',league:'all',match:null,market:'all',slide:0,fixtures:[],failures:[],loading:false,settings:read('settings',{auto:true}),favs:read('favorites',[]),updated:read('updated',0)};
 function read(k,fallback){try{return JSON.parse(localStorage.getItem(key+k))??fallback}catch{return fallback}}function save(k,v){try{localStorage.setItem(key+k,JSON.stringify(v))}catch{}}const fmt=d=>new Date(d).toLocaleString('tr-TR',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});const dateKey=d=>{let y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}${m}${day}`};
 function parseEvent(e,league){const c=e.competitions?.[0],h=c?.competitors?.find(t=>t.homeAway==='home'),a=c?.competitors?.find(t=>t.homeAway==='away');if(!h||!a)return null;let done=e.status?.type?.completed===true;return {id:league+':'+e.id,league,date:e.date,done,home:{id:String(h.team?.id),name:h.team?.displayName||h.team?.name||'Ev sahibi',logo:h.team?.logo||h.team?.logos?.[0]?.href||'',score:done?Number(h.score):null},away:{id:String(a.team?.id),name:a.team?.displayName||a.team?.name||'Deplasman',logo:a.team?.logo||a.team?.logos?.[0]?.href||'',score:done?Number(a.score):null}}}
@@ -14,36 +14,25 @@ const markets=[['Maç Sonucu',[['1','home'],['X','draw'],['2','away']]],['Çifte
 function percent(x){return Math.round(100*x)}function leagueName(code){return LEAGUES.find(x=>x[0]===code)?.[1]||code}function logo(t){return t.logo?`<img class="logo" src="${esc(t.logo)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`:'<span class="logo">⚽</span>'}
 function filtered(){return state.fixtures.filter(m=>(!m.done||retainFinished(m))&&(state.league==='all'||m.league===state.league))}function fixture(m){let data=state.history||[],an=model(m,data);return {...m,analysis:an}}function available(){return filtered().map(fixture)}function best(m){let a=m.analysis;if(!a.ready)return null;let pairs=markets.flatMap(([group,rows])=>rows.map(([name,k])=>({group,name,k,p:a.p[k]}))).filter(x=>x.p>=.5);return pairs.sort((a,b)=>b.p-a.p)[0]||null}
 function triple(a){return `<div class="triple"><div class="pill win">1<strong>%${percent(a.p.home)}</strong></div><div class="pill draw">X<strong>%${percent(a.p.draw)}</strong></div><div class="pill loss">2<strong>%${percent(a.p.away)}</strong></div></div>`}
-function hero(m,index,total){let b=best(m),ready=m.analysis.ready;return `<div class="hero" style="background-image:linear-gradient(180deg,rgba(4,17,38,.74) 0%,rgba(5,19,39,.52) 40%,rgba(4,17,34,.84) 100%),url('./stadium-featured.webp');background-size:cover;background-position:center;background-repeat:no-repeat;" id="featured-slide" data-open="${esc(m.id)}" role="button" tabindex="0" aria-label="Öne çıkan maç ${index+1} / ${total}"><div class="top"><span class="tag">★ ${b?'Günün maçı':'Günün karşılaşması'}</span><span class="flag">${esc(leagueName(m.league))}</span></div><div class="versus"><div>${logo(m.home)}<b>${esc(m.home.name)}</b></div><strong>${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?m.home.score+' - '+m.away.score:'VS'}</strong><div>${logo(m.away)}<b>${esc(m.away.name)}</b></div></div><div class="muted" style="text-align:center;margin-bottom:10px">${fmt(m.date)}</div><div style="font-size:clamp(22px,4.5vw,30px);font-weight:850;text-align:center;color:#f5f9ff;margin:18px 0 14px;letter-spacing:-.4px">Maç Sonucu Tahmini <span style="white-space:nowrap;color:#b7d8ff">(1-X-2)</span></div>${ready?triple(m.analysis):'<div class="muted" style="text-align:center">Bu maç için yeterli geçmiş veri yok.</div>'}${b?`<div style="margin-top:18px;padding:13px 16px;border:1px solid #315572;border-radius:14px;background:rgba(15,36,59,.65);font-size:16px;line-height:1.55;text-align:center"><span style="color:#b6cbe0">Diğer güçlü tahmin</span><div style="font-weight:750;color:#fff">${esc(b.group)} · ${esc(b.name)} — <span style="color:#ffc847">%${percent(b.p)}</span></div></div>`:''}<div class="dots" aria-label="${index+1}. maç, toplam ${total} maç">${index+1} / ${total}</div><button class="link" data-open="${esc(m.id)}" style="width:100%;text-align:center">Tüm olasılıkları gör →</button></div>`}
+function hero(m,index,total){let b=best(m),ready=m.analysis.ready;return `<div class="hero" style="background-image:linear-gradient(180deg,rgba(4,17,38,.74) 0%,rgba(5,19,39,.52) 40%,rgba(4,17,34,.84) 100%),url('./stadium-featured.webp');background-size:cover;background-position:center;background-repeat:no-repeat;" id="featured-slide" data-open="${esc(m.id)}" role="button" tabindex="0" aria-label="Öne çıkan maç ${index+1} / ${total}"><div class="top"><span class="tag">★ ${b?'Günün maçı':'Günün karşılaşması'}</span><span class="flag">${esc(leagueName(m.league))}</span></div><div class="versus"><div>${logo(m.home)}<b>${esc(m.home.name)}</b></div><strong>${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?m.home.score+' - '+m.away.score:'VS'}</strong><div>${logo(m.away)}<b>${esc(m.away.name)}</b></div></div><div class="muted" style="text-align:center;margin-bottom:10px">${m.live?`<span style="color:#ff666e;font-weight:800">🔴 CANLI ${esc(m.clock||'')}</span> · ${fmt(m.date)}`:fmt(m.date)}</div><div style="font-size:clamp(22px,4.5vw,30px);font-weight:850;text-align:center;color:#f5f9ff;margin:18px 0 14px;letter-spacing:-.4px">Maç Sonucu Tahmini <span style="white-space:nowrap;color:#b7d8ff">(1-X-2)</span></div>${ready?triple(m.analysis):'<div class="muted" style="text-align:center">Bu maç için yeterli geçmiş veri yok.</div>'}${b?`<div style="margin-top:18px;padding:13px 16px;border:1px solid #315572;border-radius:14px;background:rgba(15,36,59,.65);font-size:16px;line-height:1.55;text-align:center"><span style="color:#b6cbe0">Diğer güçlü tahmin</span><div style="font-weight:750;color:#fff">${esc(b.group)} · ${esc(b.name)} — <span style="color:#ffc847">%${percent(b.p)}</span></div></div>`:''}<div class="dots" aria-label="${index+1}. maç, toplam ${total} maç">${index+1} / ${total}</div><button class="link" data-open="${esc(m.id)}" style="width:100%;text-align:center">Tüm olasılıkları gör →</button></div>`}
 function istanbulDay(date){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(date))}
 function featuredMatches(){
   const now=Date.now(), today=istanbulDay(now);
-  const upcoming=available().filter(m=>!m.done&&new Date(m.date).getTime()>=now).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const matches=available().filter(m=>!m.done||retainFinished(m));
+  // A live fixture must remain featured even after its scheduled kickoff time.
+  const liveToday=matches.filter(m=>(m.live||m.done)&&istanbulDay(m.date)===today).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const upcoming=matches.filter(m=>!m.live&&new Date(m.date).getTime()>=now).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const todayUpcoming=upcoming.filter(m=>istanbulDay(m.date)===today);
+  // Keep every live game in the carousel; show today's upcoming games alongside them.
+  if(liveToday.length)return [...liveToday,...todayUpcoming];
+  if(todayUpcoming.length)return todayUpcoming;
   if(!upcoming.length)return [];
-  // Choose the earliest day with model-ready matches, prioritizing today.
-  // Never promote a distant headline game just because it has a higher probability.
-  const ready=upcoming.filter(m=>m.analysis?.ready && best(m));
-  const pool=ready.length?ready:upcoming;
-  const day=[...new Set(pool.map(m=>istanbulDay(m.date)))].sort().find(d=>d>=today);
-  if(!day)return [];
-  return pool.filter(m=>istanbulDay(m.date)===day).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const day=istanbulDay(upcoming[0].date);
+  return upcoming.filter(m=>istanbulDay(m.date)===day);
 }
 function liveMinute(m){let v=String(m.clock||'').match(/\d+/);return v?Math.min(120,Number(v[0])):null}
-function liveAnalysis(m){
-  const base=state.analyses?.[m.id];
-  if(!m.live||!base?.ready||!Number.isFinite(base.lh)||!Number.isFinite(base.la))return base||{ready:false,nh:0,na:0};
-  const hg=m.home.score,ag=m.away.score,minute=liveMinute(m);
-  if(!Number.isInteger(hg)||!Number.isInteger(ag)||minute===null)return {...base,liveUnavailable:true};
-  // Conditional Poisson for remaining regular time; pre-match lambdas are per 90 min.
-  const remaining=Math.max(0,90-minute)/90,lh=base.lh*remaining,la=base.la*remaining;
-  const poisson=(k,l)=>{let p=Math.exp(-l);for(let n=1;n<=k;n++)p*=l/n;return p};
-  let p={...base.p,home:0,draw:0,away:0},mass=0;
-  for(let i=0;i<=15;i++)for(let j=0;j<=15;j++){let w=poisson(i,lh)*poisson(j,la);mass+=w;p[hg+i>ag+j?'home':hg+i===ag+j?'draw':'away']+=w}
-  for(const k of ['home','draw','away'])p[k]/=mass;
-  p.homeOrDraw=p.home+p.draw;p.awayOrDraw=p.away+p.draw;p.noDraw=p.home+p.away;
-  // Only 1-X-2 is a live probability; other markets remain pre-match and must not be displayed as live.
-  return {...base,p,liveCalculated:true,minute};
-}
+function liveAnalysis(m){const base=state.analyses?.[m.id];return base||{ready:false,nh:0,na:0};}
+
 function matchCard(m){let a=m.analysis;return `<button class="card match" data-open="${esc(m.id)}">${logo(m.home)}<div class="teams"><small>${esc(leagueName(m.league))} · ${m.done?'✓ TAMAMLANDI':m.live?'🔴 CANLI '+esc(m.clock||''):fmt(m.date)}</small><b>${esc(m.home.name)} – ${esc(m.away.name)}${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?' · '+m.home.score+'-'+m.away.score:''}</b></div>${a.ready?`<div class="mini"><span>%${percent(a.p.home)}</span><span>%${percent(a.p.draw)}</span><span>%${percent(a.p.away)}</span></div>`:'<span class="muted">Veri az</span>'}<span>›</span></button>`}
 function leagueTabs(){return `<div class="tabs"><button data-league="all" class="${state.league==='all'?'active':''}">Tümü</button>${LEAGUES.map(([id,name,flag])=>`<button data-league="${id}" class="${state.league===id?'active':''}">${flag} ${esc(name)}</button>`).join('')}</div>`}
 function home(){let all=available(),featured=featuredMatches(),idx=featured.length?((state.slide%featured.length)+featured.length)%featured.length:0;return `${leagueTabs()}<div class="sectionhead"><h2>🏆 ${featured.length&&istanbulDay(featured[0].date)!==istanbulDay(Date.now())?'Sıradaki Günün Maçları':'Günün Öne Çıkanları'}</h2><button class="link" data-page="matches">Tümünü gör ›</button></div>${featured.length?hero(featured[idx],idx,featured.length):`<div class="empty">${state.loading?'Maç verileri alınıyor…':'Yaklaşan maç bulunamadı.'}</div>`}${featured.length>1?`<div class="actions"><button data-slide="prev" aria-label="Önceki maç">‹ Önceki</button><button data-slide="next" aria-label="Sonraki maç">Sonraki ›</button></div>`:''}<div class="sectionhead"><h2>Canlı ve Yaklaşan Maçlar</h2><button class="link" data-page="matches">Tümünü gör ›</button></div>${all.length?all.slice(0,8).map(matchCard).join(''):'<div class="empty">Bu ligde henüz maç bulunamadı.</div>'}`}
@@ -105,10 +94,11 @@ async function load(force=false){
     state.fixtures=valid.filter(m=>retainFinished(m,now)||(!m.done&&(m.live||(new Date(m.date).getTime()>=now-4*3600e3&&new Date(m.date).getTime()<=now+7*864e5)))).sort((a,b)=>Number(!!b.live)-Number(!!a.live)||new Date(a.date)-new Date(b.date));
     state.updated=Date.parse(j.updatedAt)||Date.now();
     state.failures=j.errors||[];
-    save('updated',state.updated);save('events',valid);
+    save('updated',state.updated);save('events',valid);save('analyses',state.analyses);
   }catch(err){
     state.failures=['Yayınlanan veri dosyasına ulaşılamadı: '+err.message];
     // Do not delete last valid cached snapshot.
+    if(!state.history?.length){const cached=read('events',[]);if(Array.isArray(cached)&&cached.length){state.history=cached;state.analyses=read('analyses',{});state.fixtures=cached.filter(m=>!m.done||retainFinished(m));}}
   }
   state.loading=false;render();pollLive();
 }

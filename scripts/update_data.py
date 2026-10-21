@@ -2,6 +2,7 @@
 """Collect 7-day fixtures and past results; derive statistics locally in the PWA."""
 import datetime as dt
 import json
+import sqlite3
 import os
 import pathlib
 import time
@@ -9,15 +10,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from analysis_engine import calculate, settle_archive, metrics, when
-from elo_engine import matchup, opponent_form_adjustment
 
-LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf']
+LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','ned.1','eng.2','uefa.champions','uefa.europa','uefa.europa.conf','fifa.world','uefa.euro','uefa.nations','conmebol.america','concacaf.gold.cup','afc.asian.cup','caf.nations']
 # Extra competitions are used ONLY for historical team form, not displayed as fixtures.
 # ESPN codes are unofficial; unsupported competitions are skipped gracefully.
-CUP_LEAGUES = ['tur.cup','eng.fa','eng.league_cup','esp.copa_del_rey','ger.dfb_pokal','ita.coppa_italia','fra.coupe_de_france']
+CUP_LEAGUES = ['tur.cup','eng.fa','eng.league_cup','esp.copa_del_rey','ger.dfb_pokal','ita.coppa_italia','fra.coupe_de_france', 'ned.knvb_beker', 'fifa.worldq.uefa', 'fifa.worldq.conmebol', 'fifa.worldq.concacaf', 'fifa.worldq.afc', 'fifa.worldq.caf', 'fifa.worldq.ofc', 'fifa.friendly']
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TODAY = dt.datetime.now(dt.timezone.utc).date()
-HISTORY_DAYS = 180
+HISTORY_DAYS = 730
 FUTURE_DAYS = 7
 
 
@@ -66,23 +66,38 @@ def main():
             previous = {e['id']: e for e in json.loads(path.read_text('utf-8')).get('events', []) if e.get('id')}
         except (ValueError, KeyError, TypeError):
             pass
+    # Persistent SQLite history survives regenerated data.json snapshots.
+    db = sqlite3.connect(str(ROOT / 'match_archive.sqlite3'))
+    db.execute('CREATE TABLE IF NOT EXISTS matches (id TEXT PRIMARY KEY, league TEXT NOT NULL, date TEXT NOT NULL, done INTEGER NOT NULL, payload TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS seeded_leagues (league TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)')
+    for (payload,) in db.execute('SELECT payload FROM matches'):
+        try:
+            old = json.loads(payload)
+            if old.get('id') and old.get('done'):
+                previous.setdefault(old['id'], old)
+        except (ValueError, TypeError):
+            continue
     events = dict(previous)
     errors = []
     # Use short windows to avoid the HTTP 400 produced by a 165-day request.
     # Fall back to single days only for windows that are rejected.
     first = TODAY - dt.timedelta(days=HISTORY_DAYS)
     last = TODAY + dt.timedelta(days=FUTURE_DAYS)
-    full_refresh = os.environ.get('FULL_REFRESH', '0') == '1'
+    # Historical seeding is incremental: at most one unseeded competition per run.
+    seed_batch = max(0, int(os.environ.get('SEED_BATCH', '1')))
+    unseeded_batch = set([x for x in list(dict.fromkeys(LEAGUES + CUP_LEAGUES)) if x not in {r[0] for r in db.execute('SELECT league FROM seeded_leagues') }][:seed_batch])
     # Short refresh: only recently completed matches and upcoming fixtures.
     # Historical results are retained from the prior snapshot; twice daily
     # full scans restore coverage for missed updates and cup matches.
-    scan_first = first if full_refresh else TODAY - dt.timedelta(days=2)
-    scan_leagues = LEAGUES + CUP_LEAGUES
-    print('Refresh mode:', 'full' if full_refresh else 'incremental', flush=True)
+    scan_leagues = list(dict.fromkeys(LEAGUES + CUP_LEAGUES))
+    seeded = {r[0] for r in db.execute('SELECT league FROM seeded_leagues')}
+    # Newly added leagues get a one-time historical import; others only a short delta.
+    scan_first = TODAY - dt.timedelta(days=2)
+    print('Historical seed batch:', sorted(unseeded_batch), flush=True)
     for league in scan_leagues:
         successful = 0
         failures = 0
-        day = scan_first
+        day = first if league in unseeded_batch else scan_first
         while day <= last:
             end = min(day + dt.timedelta(days=2), last)
             try:
@@ -105,10 +120,25 @@ def main():
             day = end + dt.timedelta(days=1)
             time.sleep(0.05)
         print(f'{league}: {successful} successful windows/days, {failures} failed days', flush=True)
+        # Mark seeded only if the historical scan completed without gaps.
+        if league in unseeded_batch and failures == 0 and successful:
+            db.execute('INSERT OR REPLACE INTO seeded_leagues VALUES (?,?)', (league, dt.datetime.now(dt.timezone.utc).isoformat()))
+            db.commit()
         if failures and league in LEAGUES:
             errors.append(f'{league}: {failures} gün sorgulanamadı')
         elif failures and league in CUP_LEAGUES:
             print(f'Optional cup {league}: {failures} dates unavailable (non-fatal)', flush=True)
+    # Upsert only observed fixtures; never remove prior completed matches.
+    for event in events.values():
+        if not event.get('id') or not event.get('date'):
+            continue
+        db.execute('INSERT INTO matches (id,league,date,done,payload) VALUES (?,?,?,?,?) '
+                   'ON CONFLICT(id) DO UPDATE SET league=excluded.league,date=excluded.date,'
+                   'done=excluded.done,payload=excluded.payload',
+                   (event['id'],event['league'],event['date'],int(bool(event.get('done'))),
+                    json.dumps(event,ensure_ascii=False,separators=(',',':'))))
+    db.commit()
+    db.close()
     if not any(e.get('done') or e.get('date', '') >= TODAY.isoformat() for e in events.values()):
         raise RuntimeError('Veri alınamadı; önceki snapshot korunuyor')
     # Preserve all previously collected final scores; never discard old history.
@@ -156,11 +186,11 @@ def main():
             continue
         fp = fingerprint(match)
         cached = previous_analyses.get(match['id'], {})
-        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v4-opponent-adjusted':
+        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v2-all-competitions':
             result = cached
             cache_hits += 1
         else:
-            result = calculate(match, selected, matchup(selected, match), opponent_form_adjustment(selected, match))
+            result = calculate(match, selected)
             result['historyFingerprint'] = fp
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
