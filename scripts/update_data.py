@@ -58,6 +58,98 @@ def request(league, start, end=None):
     return [v for e in data.get('events', []) if (v := parse_event(e, league))]
 
 
+def team_schedule(league, team_id, season):
+    """ESPN team schedule, scoped to a competition and season.
+
+    ESPN team identifiers are NOT treated as globally unique.
+    """
+    url = ("https://site.api.espn.com/apis/site/v2/sports/soccer/"
+           + urllib.parse.quote(league, safe='') + '/teams/'
+           + urllib.parse.quote(str(team_id), safe='') + '/schedule?'
+           + urllib.parse.urlencode({'season': season, 'limit': 150}))
+    req = urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0', 'Accept':'application/json'})
+    with urllib.request.urlopen(req, timeout=12) as response:
+        payload = json.load(response)
+    return [m for e in payload.get('events', [])
+            if (m := parse_event(e, league)) is not None]
+
+
+def fill_team_gaps(db, events, competition_codes):
+    """Target teams with fewer than ten finished games, without deleting old rows.
+
+    Bounded work per run; team schedules can be missing or incomplete in ESPN.
+    """
+    from analysis_engine import recent, team_key, when
+    db.execute('CREATE TABLE IF NOT EXISTS team_backfill (team_key TEXT PRIMARY KEY, '
+               'last_checked TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)')
+    now = dt.datetime.now(dt.timezone.utc)
+    future = sorted((m for m in events.values() if m['league'] in LEAGUES
+                     and not m.get('done') and when(m['date']) >= now - dt.timedelta(hours=4)
+                     and when(m['date']) <= now + dt.timedelta(days=FUTURE_DAYS)),
+                    key=lambda m:m['date'])
+    candidates = {}
+    for m in future:
+        for side in ('home','away'):
+            team = m[side]
+            key = team_key(team.get('name'))
+            if not key or not team.get('id'):
+                continue
+            if key not in candidates:
+                candidates[key] = {'team':team, 'kickoff':when(m['date']), 'leagues':[]}
+            if m['league'] not in candidates[key]['leagues']:
+                candidates[key]['leagues'].append(m['league'])
+    todo=[]
+    for key, item in candidates.items():
+        n=len(recent(list(events.values()), item['team'], item['kickoff']))
+        if n >= 10: continue
+        row=db.execute('SELECT last_checked,attempts FROM team_backfill WHERE team_key=?',(key,)).fetchone()
+        # Prioritize never-checked teams, then oldest attempts; never starve other teams.
+        todo.append((row[0] if row else '', n, key, item, (row[1] if row else 0)))
+    todo.sort(key=lambda x:(x[0], x[1], x[2]))
+    limit=max(1,int(os.environ.get('TEAM_BATCH','12')))
+    selected=todo[:limit]
+    print(f'TEAM BACKFILL: {len(candidates)} teams in fixture window, '
+          f'{len(todo)} below ten, checking {len(selected)}', flush=True)
+    for _, before, key, item, attempts in selected:
+        team=item['team']; added=0; successful=0; errors=[]
+        # The source fixture's competition is the only safe place to reuse its ESPN team id.
+        # Additional leagues are discovered via matching team names from known events.
+        sources=[]
+        for league in item['leagues']:
+            sources.append((league,team['id']))
+        for m in events.values():
+            if not m.get('done'):continue
+            for side in ('home','away'):
+                t=m[side]
+                if team_key(t.get('name'))==key and t.get('id'):
+                    pair=(m['league'],t['id'])
+                    if pair not in sources:sources.append(pair)
+        # Limit expensive remote requests; fallback competition sweep still runs separately.
+        for league, tid in sources[:4]:
+            if league not in competition_codes:continue
+            for season in (TODAY.year, TODAY.year-1):
+                try:
+                    rows=team_schedule(league,tid,season)
+                    successful+=1
+                    for m in rows:
+                        if m.get('done') and (not events.get(m['id'],{}).get('done')):
+                            events[m['id']]=m;added+=1
+                        elif m['id'] not in events:
+                            events[m['id']]=m
+                except Exception as exc:
+                    errors.append(f'{league}/{season}: {type(exc).__name__}')
+            if len(recent(list(events.values()),team,item['kickoff']))>=10:break
+        after=len(recent(list(events.values()),team,item['kickoff']))
+        db.execute('INSERT INTO team_backfill(team_key,last_checked,attempts) VALUES(?,?,?) '
+                   'ON CONFLICT(team_key) DO UPDATE SET last_checked=excluded.last_checked,'
+                   'attempts=excluded.attempts',
+                   (key,now.isoformat(),attempts+1))
+        print(f'TEAM {team["name"]}: {before}-> {after}/10; new finals={added}; '
+              f'schedule calls ok={successful}; failures={len(errors)}'
+              + (f' ({", ".join(errors[:2])})' if errors else ''),flush=True)
+    db.commit()
+
+
 def main():
     path = ROOT / 'data.json'
     previous = {}
@@ -109,6 +201,9 @@ def main():
             events[e['id']] = e if not (events.get(e['id'], {}).get('done') and not e.get('done')) else events[e['id']]
         print(f'{league}: recent {len(rows)} events, {failures} unavailable days', flush=True)
 
+    # Target the teams that actually appear in upcoming fixtures first.
+    fill_team_gaps(db, events, scan_leagues)
+
     # A bounded historical slice per competition each run. All leagues progress
     # together, including club cups and international competitions used for form.
     # A 90-day slice is enough to reach ten games for most active teams quickly.
@@ -123,7 +218,9 @@ def main():
             incomplete.append((league, dt.date.fromisoformat(row[0])))
     # Rotate between competitions on successive runs; never repeatedly restart
     # the Turkish league after one isolated ESPN failure.
-    chosen = incomplete[:batch]
+    # Rotate by the least recently progressed cursor (new leagues first).
+    # Otherwise the first six competitions monopolize every run.
+    chosen = sorted(incomplete, key=lambda x: (x[1] != TODAY - dt.timedelta(days=4), -x[1].toordinal()))[:batch]
     print('Historical backfill batch:', [x[0] for x in chosen], flush=True)
     for league, end_date in chosen:
         start_date = max(first, end_date - dt.timedelta(days=slice_days-1))
