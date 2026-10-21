@@ -23,6 +23,7 @@ jobs:
         env:
           SEED_BATCH: '6'
           SEED_DAYS: '90'
+          TEAM_BATCH: '12'
         run: python scripts/update_data.py
       - name: Commit durable database and published snapshot
         run: |
