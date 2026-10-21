@@ -19,9 +19,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Update new matches and seed one historical competition
+      - name: Update new matches and backfill team form across competitions
         env:
-          SEED_BATCH: '1'
+          SEED_BATCH: '6'
+          SEED_DAYS: '90'
         run: python scripts/update_data.py
       - name: Commit durable database and published snapshot
         run: |
