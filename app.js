@@ -92,7 +92,7 @@ async function load(force=false){
     state.history=valid;
     state.analyses=j.analyses||{};state.validation=j.validation||null;state.archive=Array.isArray(j.predictionArchive)?j.predictionArchive:[];
     const now=Date.now();
-    state.fixtures=valid.filter(m=>!m.done&&(m.live||(new Date(m.date).getTime()>=now&&new Date(m.date).getTime()<=now+7*864e5))).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    state.fixtures=valid.filter(m=>!m.done&&(m.live||(new Date(m.date).getTime()>=now-4*3600e3&&new Date(m.date).getTime()<=now+7*864e5))).sort((a,b)=>Number(!!b.live)-Number(!!a.live)||new Date(a.date)-new Date(b.date));
     state.updated=Date.parse(j.updatedAt)||Date.now();
     state.failures=j.errors||[];
     save('updated',state.updated);save('events',valid);
@@ -100,7 +100,7 @@ async function load(force=false){
     state.failures=['Yayınlanan veri dosyasına ulaşılamadı: '+err.message];
     // Do not delete last valid cached snapshot.
   }
-  state.loading=false;render();
+  state.loading=false;render();pollLive();
 }
 // Historical results are kept in a separate collection, so past matches are never lost when the fixture list is built.
 function fixtureWithHistory(m){
@@ -122,11 +122,11 @@ if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch
 // ESPN's unofficial endpoint may disallow browser CORS; in that case the published snapshot remains.
 let livePolling=false;
 async function pollLive(){
-  if(document.hidden||livePolling||!state.fixtures.length)return;
+  if(document.hidden||livePolling)return;
   livePolling=true;
   try{
     const today=new Date(),yesterday=new Date(today.getTime()-86400000);
-    const dates=[dateKey(yesterday),dateKey(today)];
+    const tomorrow=new Date(today.getTime()+86400000);const dates=[dateKey(yesterday),dateKey(tomorrow)];
     const updates=await Promise.allSettled(LEAGUES.map(async ([league])=>{
       const url=BASE+encodeURIComponent(league)+'/scoreboard?dates='+dates.join('-')+'&limit=200';
       const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),9000);
@@ -140,12 +140,20 @@ async function pollLive(){
           const done=type.completed===true;
           if(!home||!away)return null;
           const score=x=>x?.score!==undefined&&x.score!==null&&String(x.score).trim()!==''&&Number.isFinite(Number(x.score))?Number(x.score):null;
-          return {id:league+':'+e.id,live,done,clock:String(e.status?.displayClock||''),hs:score(home),as:score(away)};
+          return {id:league+':'+e.id,live,done,clock:String(e.status?.displayClock||''),hs:score(home),as:score(away),event:parseEvent(e,league)};
         }).filter(Boolean);
       }finally{clearTimeout(timer)}
     }));
     const map=new Map(updates.filter(x=>x.status==='fulfilled').flatMap(x=>x.value).map(x=>[x.id,x]));
     let changed=false;
+    for(const v of map.values()){
+      if(!v.live||!v.event||state.fixtures.some(m=>m.id===v.id))continue;
+      const m={...v.event,live:true,clock:v.clock,done:false};
+      m.home.score=v.hs;m.away.score=v.as;
+      state.fixtures.push(m);
+      if(!state.history.some(x=>x.id===m.id))state.history.push(m);
+      changed=true;
+    }
     for(const m of state.fixtures){
       const v=map.get(m.id);if(!v)continue;
       const newLive=v.live,clock=v.clock,hs=(v.live||v.done)?v.hs:null,as=(v.live||v.done)?v.as:null;
@@ -154,7 +162,7 @@ async function pollLive(){
       }
       if(v.done){m.done=true;changed=true}
     }
-    if(changed){render();if(state.fixtures.some(m=>m.done))load(true)}
+    if(changed){state.fixtures=state.fixtures.filter(m=>!m.done).sort((a,b)=>Number(!!b.live)-Number(!!a.live)||new Date(a.date)-new Date(b.date));render();}
   }catch(e){/* Preserve the last published snapshot when the live source is unavailable. */}
   finally{livePolling=false}
 }

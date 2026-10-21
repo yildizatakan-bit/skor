@@ -152,7 +152,7 @@ def main():
     diagnostics = {}
     cache_hits = 0
     for match in selected:
-        if match['league'] not in LEAGUES or match.get('done') or (when(match['date']) <= now and not match.get('live')):
+        if match['league'] not in LEAGUES or match.get('done') or (when(match['date']) < now - dt.timedelta(hours=4) and not match.get('live')):
             continue
         fp = fingerprint(match)
         cached = previous_analyses.get(match['id'], {})
