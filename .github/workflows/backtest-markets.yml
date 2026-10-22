@@ -1,0 +1,21 @@
+name: Backtest expanded markets (read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test historical market probabilities
+        run: python scripts/backtest_markets.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v31-market-backtest
+          path: |
+            market_backtest_report.json
+            market_backtest_report.csv
