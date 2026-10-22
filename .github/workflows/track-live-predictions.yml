@@ -1,0 +1,30 @@
+name: Track frozen predictions (read only)
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs after the existing archive updater's 03:17/09:17/15:17/21:17 UTC slots.
+    - cron: '10 4,10,16,22 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: frozen-prediction-tracking
+  cancel-in-progress: false
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Evaluate pre-kickoff frozen probabilities
+        run: python scripts/track_live_predictions.py
+      - name: Upload tracking reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-prediction-tracking
+          path: |
+            live_tracking_report.json
+            live_tracking_report.csv
+          retention-days: 90
