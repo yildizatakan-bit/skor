@@ -102,11 +102,56 @@ def calculate(match,events,elo=None,opponent_adjustment=None):
             if j<2:p['awayUnder15']+=v
     for k in p:p[k]=p[k]/mass
     p['homeOrDraw']=p['home']+p['draw'];p['awayOrDraw']=p['away']+p['draw'];p['noDraw']=p['home']+p['away']
+    p.update(expanded_markets(lh,la))
     return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v4-opponent-adjusted','elo':elo,'opponentAdjustment':adj,'limitations':['No player or lineup data','Elo ratings relative to available history','Heuristic coefficients not backtested']}
+
+# Additional markets are derived from the SAME full-time score distribution.
+# No extra API calls, no independent models and no multiplication of correlated events.
+def expanded_markets(lh, la):
+    keys = ['over05','under05','over45','under45','over55','under55',
+            'homeUnder05','homeOver15','homeUnder25','homeOver25',
+            'awayUnder05','awayOver15','awayUnder25','awayOver25',
+            'goals01','goals23','goals45','goals6plus',
+            'marginHome1','marginHome2','marginHome3plus','marginAway1','marginAway2','marginAway3plus',
+            
+            'homeOver15Win','homeOver25Win','awayOver15Win','awayOver25Win',
+            'homeWinBtts','awayWinBtts','over25Btts','under25Btts']
+    p={k:0.0 for k in keys}
+    hp=[math.exp(-lh)]; ap=[math.exp(-la)]
+    for i in range(1,21):hp.append(hp[-1]*lh/i);ap.append(ap[-1]*la/i)
+    mass=0.0
+    for i in range(21):
+        for j in range(21):
+            v=hp[i]*ap[j];mass+=v;g=i+j
+            conditions={
+                'over05':g>=1,'under05':g==0,'over45':g>=5,'under45':g<=4,'over55':g>=6,'under55':g<=5,
+                'homeUnder05':i==0,'homeOver15':i>=2,'homeUnder25':i<=2,'homeOver25':i>=3,
+                'awayUnder05':j==0,'awayOver15':j>=2,'awayUnder25':j<=2,'awayOver25':j>=3,
+                'goals01':g<=1,'goals23':2<=g<=3,'goals45':4<=g<=5,'goals6plus':g>=6,
+                'marginHome1':i-j==1,'marginHome2':i-j==2,'marginHome3plus':i-j>=3,
+                'marginAway1':j-i==1,'marginAway2':j-i==2,'marginAway3plus':j-i>=3,
+                'homeOver15Win':i>j and g>=2,'homeOver25Win':i>j and g>=3,
+                'awayOver15Win':j>i and g>=2,'awayOver25Win':j>i and g>=3,
+                'homeWinBtts':i>j and j>0,'awayWinBtts':j>i and i>0,
+                'over25Btts':g>=3 and i>0 and j>0,'under25Btts':g<=2 and i>0 and j>0,
+            }
+            for k,yes in conditions.items():
+                if yes:p[k]+=v
+    return {k:round(v/mass,6) for k,v in p.items()}
 
 def outcome(k,h,a):
     total=h+a
-    return {'home':h>a,'draw':h==a,'away':h<a,'homeOrDraw':h>=a,'awayOrDraw':h<=a,'noDraw':h!=a,'over15':total>1,'under15':total<=1,'over25':total>2,'under25':total<=2,'over35':total>3,'under35':total<=3,'btts':h>0 and a>0,'noBtts':h==0 or a==0,'homeOver05':h>0,'awayOver05':a>0,'homeUnder15':h<2,'awayUnder15':a<2,'even':total%2==0,'odd':total%2==1}[k]
+    return {'home':h>a,'draw':h==a,'away':h<a,'homeOrDraw':h>=a,'awayOrDraw':h<=a,'noDraw':h!=a,'over15':total>1,'under15':total<=1,'over25':total>2,'under25':total<=2,'over35':total>3,'under35':total<=3,'btts':h>0 and a>0,'noBtts':h==0 or a==0,'homeOver05':h>0,'awayOver05':a>0,'homeUnder15':h<2,'awayUnder15':a<2,'even':total%2==0,'odd':total%2==1,
+            'over05':total>=1,'under05':total==0,'over45':total>=5,'under45':total<=4,'over55':total>=6,'under55':total<=5,
+            'homeUnder05':h==0,'homeOver15':h>=2,'homeUnder25':h<=2,'homeOver25':h>=3,
+            'awayUnder05':a==0,'awayOver15':a>=2,'awayUnder25':a<=2,'awayOver25':a>=3,
+            'goals01':total<=1,'goals23':2<=total<=3,'goals45':4<=total<=5,'goals6plus':total>=6,
+            'marginHome1':h-a==1,'marginHome2':h-a==2,'marginHome3plus':h-a>=3,
+            'marginAway1':a-h==1,'marginAway2':a-h==2,'marginAway3plus':a-h>=3,
+            'homeOver15Win':h>a and total>=2,'homeOver25Win':h>a and total>=3,
+            'awayOver15Win':a>h and total>=2,'awayOver25Win':a>h and total>=3,
+            'homeWinBtts':h>a and a>0,'awayWinBtts':a>h and h>0,
+            'over25Btts':total>=3 and h>0 and a>0,'under25Btts':total<=2 and h>0 and a>0}[k]
 
 def settle_archive(archive,events):
     lookup={e['id']:e for e in events}
