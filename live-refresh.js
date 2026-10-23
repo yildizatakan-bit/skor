@@ -1,9 +1,10 @@
 'use strict';
-// v37: reliable live-only overlay for the existing app.js.
+// v38: 60-second direct scoreboard polling, visible health/status, GitHub fallback.
+// This file MUST be included in index.html after app.js.
 // It NEVER recalculates predictions or touches persisted prediction history.
 (function () {
   if (typeof pollLive !== 'function' || typeof state === 'undefined' || typeof render !== 'function') {
-    console.warn('[v37 live] app.js not loaded; live overlay inactive');
+    console.warn('[v38 live] app.js not loaded; live overlay inactive');
     return;
   }
   const RAW = 'https://raw.githubusercontent.com/yildizatakan-bit/skor/live-scores/live_scores.json';
@@ -14,6 +15,9 @@
   let lastSuccessful = null;
   let lastSource = '';
   let lastProblem = '';
+  let lastAttempt = null;
+  let confirmedLeagues = 0;
+  const CORE_LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','uefa.europa','uefa.europa.conf'];
 
   async function readPublishedSnapshot() {
     const controller = new AbortController();
@@ -34,21 +38,31 @@
   }
 
   function activeLeagueDays() {
-    const now = Date.now();
-    const result = new Map();
-    const rows = state.fixtures || [];
-    for (const item of rows) {
-      const kick = Date.parse(item.date);
-      if (!Number.isFinite(kick) || item.done || kick < now - TODAY_RANGE_MS || kick > now + 3 * 60 * 60 * 1000) continue;
-      if (!LEAGUES.some(x => x[0] === item.league)) continue;
-      if (!result.has(item.league)) result.set(item.league, new Set());
-      // ESPN dates can follow either source UTC day or device-local fixture day.
-      const utcDay = new Date(kick).toISOString().slice(0, 10).replace(/-/g, '');
-      const localDay = dateKey(new Date(kick));
-      result.get(item.league).add(utcDay);
-      result.get(item.league).add(localDay);
+    // Query today's ESPN scoreboard even when published data.json is old.
+    // This avoids a circular dependency: a missing live game would otherwise
+    // prevent its league from being polled at all.
+    const now = new Date();
+    const wanted = new Set(CORE_LEAGUES);
+    const near = (state.fixtures || []).concat(state.history || []);
+    for (const m of near) {
+      const kick = Date.parse(m.date);
+      if (!Number.isFinite(kick) || kick < Date.now() - 10 * 3600000 || kick > Date.now() + 7 * 3600000) continue;
+      if (LEAGUES.some(x => x[0] === m.league)) wanted.add(m.league);
     }
-    return [...result].flatMap(([league, days]) => [...days].slice(0, 2).map(day => ({league, day})));
+    // No more than 2 calendar dates for a league, usually just one.
+    const localToday = dateKey(now);
+    const utcToday = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const result = [];
+    for (const league of wanted) {
+      const gameDays = new Set([localToday, utcToday]);
+      for (const m of near) if (m.league === league) {
+        const kick = Date.parse(m.date);
+        if (Number.isFinite(kick) && kick >= Date.now() - 10 * 3600000 && kick <= Date.now() + 7 * 3600000)
+          gameDays.add(new Date(kick).toISOString().slice(0, 10).replace(/-/g, ''));
+      }
+      for (const day of [...gameDays].slice(-2)) result.push({league, day});
+    }
+    return result;
   }
 
   function fromEspn(e, league) {
@@ -89,7 +103,8 @@
       } finally {clearTimeout(timer);}
     }));
     const success = replies.filter(x => x.status === 'fulfilled');
-    if (!success.length) throw Error('Canlı ESPN sorguları başarısız');
+    confirmedLeagues = success.length;
+    if (!success.length) throw Error('Canlı ESPN sorguları başarısız (' + replies.length + ' deneme)');
     return success.flatMap(x => x.value);
   }
 
@@ -148,17 +163,30 @@
   }
 
   function decorateStatus() {
-    if (!lastSuccessful || state.page !== 'home') return;
+    if (state.page !== 'home') return;
     const heading = [...document.querySelectorAll('#content .sectionhead h2')]
       .find(x => /Canlı ve Yaklaşan Maçlar/.test(x.textContent));
-    if (!heading || heading.parentElement.querySelector('[data-v37-live-status]')) return;
-    const status = document.createElement('span');
-    status.setAttribute('data-v37-live-status', '');
-    status.style.cssText = 'font-size:10px;color:#8ec8e8;margin:0 0 0 8px;white-space:nowrap';
-    const at = new Date(lastSuccessful).toLocaleTimeString('tr-TR', {hour:'2-digit', minute:'2-digit'});
-    status.title = 'Son başarılı skor verisi: ' + at + ' · ' + lastSource;
-    status.textContent = 'Skor ' + at;
-    heading.appendChild(status);
+    if (!heading) return;
+    let status = heading.querySelector('[data-v38-live-status]');
+    if (!status) {
+      status = document.createElement('span');
+      status.setAttribute('data-v38-live-status', '');
+      status.style.cssText = 'display:block;font-size:11px;font-weight:500;margin-top:5px;color:#89c8e8;line-height:1.5';
+      heading.appendChild(status);
+    }
+    const time = x => new Date(x).toLocaleTimeString('tr-TR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    if (lastSuccessful) {
+      status.textContent = '✓ Son skor kontrolü ' + time(lastSuccessful) + ' · ' + lastSource;
+      status.style.color = '#8ce5c4';
+      status.title = 'Canlı skor kontrolü başarılı. ESPN skoru değişmediyse ekrandaki skor da değişmez.';
+    } else if (lastAttempt && lastProblem) {
+      status.textContent = '⚠ Skor yenilenemedi · ' + time(lastAttempt);
+      status.title = lastProblem;
+      status.style.color = '#ffc27d';
+    } else {
+      status.textContent = 'Canlı skor bağlantısı kontrol ediliyor…';
+      status.style.color = '#89c8e8';
+    }
   }
 
   const oldRender = render;
@@ -168,6 +196,7 @@
   pollLive = async function () {
     if (document.hidden || busy || !Array.isArray(state.fixtures) || !Array.isArray(state.history)) return;
     busy = true;
+    lastAttempt = Date.now();
     try {
       const [published, direct] = await Promise.allSettled([readPublishedSnapshot(), getDirectEspn()]);
       const items = new Map();
@@ -176,23 +205,46 @@
         lastSuccessful = published.value.at;
         lastSource = published.value.name;
       }
-      if (direct.status === 'fulfilled' && direct.value.length) {
-        // Direct ESPN queries are newest: take precedence over scheduled snapshot.
+      if (direct.status === 'fulfilled') {
+        // A valid but empty live scoreboard is still a successful check.
+        // Direct ESPN wins over stale GitHub snapshots for matching events.
         for (const m of direct.value) items.set(m.id, m);
         lastSuccessful = Date.now();
-        lastSource = 'ESPN';
+        lastSource = 'ESPN doğrudan (' + confirmedLeagues + ' kontrol)';
       }
       if (published.status === 'rejected' && direct.status === 'rejected') {
         lastProblem = [published.reason?.message, direct.reason?.message].filter(Boolean).join(' / ');
-        console.warn('[v37 live] score source unavailable:', lastProblem);
+        lastSuccessful = null;
+        console.warn('[v38 live] score source unavailable:', lastProblem);
       } else {lastProblem = '';}
       if (applyScores([...items.values()])) render();
       else decorateStatus();
-    } catch (err) {console.warn('[v37 live] refresh error:', err);}
+    } catch (err) {
+      lastProblem = String(err?.message || err);
+      lastSuccessful = null;
+      console.warn('[v38 live] refresh error:', err);
+      decorateStatus();
+    }
     finally {busy = false;}
   };
   // On first page visit app.js may have launched its old request before this script ran;
-  // force a v37 fetch after load and on return from a background tab.
+  // force a v38 fetch after load and on return from a background tab.
+  // Show active/live fixtures even when data.json has not yet received
+  // an analysis for them. Never fabricate a probability for these matches.
+  if (typeof available === 'function' && typeof filtered === 'function' && typeof fixture === 'function') {
+    const originalAvailable = available;
+    available = function () {
+      const original = originalAvailable();
+      const ids = new Set(original.map(m => m.id));
+      for (const m of filtered()) {
+        if (!m.live || ids.has(m.id)) continue;
+        original.push(fixture(m));
+        ids.add(m.id);
+      }
+      return original.sort((a,b) => Number(!!b.live)-Number(!!a.live) || Date.parse(a.date)-Date.parse(b.date));
+    };
+  }
+
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => pollLive(), {once:true});
   else pollLive();
   document.addEventListener('visibilitychange', () => {if (!document.hidden) pollLive();});
