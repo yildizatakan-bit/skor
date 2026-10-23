@@ -1,0 +1,33 @@
+name: V34 match context (observation only)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '27 5 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current archive
+        uses: actions/checkout@v4
+      - name: Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate context logic
+        run: python -m unittest discover -s scripts -p 'test_match_context_v34.py' -v
+      - name: Build read-only report
+        run: python scripts/match_context_v34.py
+      - name: Publish reports as Actions artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-context-v34
+          path: |
+            match_context_v34.json
+            match_context_v34.csv
+          retention-days: 30
