@@ -1,0 +1,27 @@
+name: V36 league stakes proxy comparison (read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run v36 unit tests
+        run: PYTHONPATH=scripts python -m unittest discover -s scripts -p 'test_compare_stakes_v36.py' -v
+      - name: Compare pre-match league stakes proxies
+        run: python scripts/compare_stakes_v36.py
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v36-league-stakes-comparison
+          path: |
+            stakes_comparison_v36.json
+            stakes_comparison_v36.csv
+          if-no-files-found: warn
