@@ -1,0 +1,27 @@
+name: V35 context model comparison (read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify v35 test utilities
+        run: PYTHONPATH=scripts python -m unittest discover -s scripts -p 'test_compare_context_v35.py' -v
+      - name: Run historical comparison
+        run: python scripts/compare_context_v35.py
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v35-context-comparison
+          path: |
+            context_comparison_v35.json
+            context_comparison_v35.csv
+          if-no-files-found: warn
