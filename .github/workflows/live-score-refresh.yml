@@ -41,10 +41,10 @@ jobs:
             git checkout --orphan live-scores
             git rm -r -f . >/dev/null 2>&1 || true
           fi
-          # Do not make 288 empty commits per day. A short heartbeat is
+          # Do not make 288 empty commits per day. A 5-minute heartbeat is
           # retained during live games even if ESPN clock temporarily freezes.
           if [ -f live_scores.json ]; then
-            if ! python -c 'import json,sys,datetime as dt; new=json.load(open(sys.argv[1])); old=json.load(open(sys.argv[2])); live=any(x.get("live") for x in new.get("events",[])); stamp=dt.datetime.fromisoformat(old["updatedAt"].replace("Z","+00:00")); age=(dt.datetime.now(dt.timezone.utc)-stamp).total_seconds(); publish=(new["events"]!=old.get("events",[]) or (live and age>=900)); sys.exit(0 if publish else 1)' "$RUNNER_TEMP/live_scores.json" live_scores.json; then
+            if ! python -c 'import json,sys,datetime as dt; new=json.load(open(sys.argv[1])); old=json.load(open(sys.argv[2])); live=any(x.get("live") for x in new.get("events",[])); stamp=dt.datetime.fromisoformat(old["updatedAt"].replace("Z","+00:00")); age=(dt.datetime.now(dt.timezone.utc)-stamp).total_seconds(); publish=(new["events"]!=old.get("events",[]) or (live and age>=300)); sys.exit(0 if publish else 1)' "$RUNNER_TEMP/live_scores.json" live_scores.json; then
               echo 'Scoreboard unchanged; no commit needed.'
               exit 0
             fi
