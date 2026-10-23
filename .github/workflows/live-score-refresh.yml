@@ -1,0 +1,60 @@
+name: Live scores every 5 minutes (separate branch)
+
+on:
+  schedule:
+    # Offset to reduce GitHub Actions congestion at :00.
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-score-publisher
+  cancel-in-progress: false
+
+jobs:
+  scores:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch lightweight live scores
+        run: python scripts/update_live_scores.py
+      - name: Publish JSON to separate live-scores branch (no Pages rebuild)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp live_scores.json "$RUNNER_TEMP/live_scores.json"
+          rm -f live_scores.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin live-scores >/dev/null 2>&1; then
+            git fetch origin live-scores
+            git checkout -B live-scores FETCH_HEAD
+          else
+            git checkout --orphan live-scores
+            git rm -r -f . >/dev/null 2>&1 || true
+          fi
+          # Do not make 288 empty commits per day. A short heartbeat is
+          # retained during live games even if ESPN clock temporarily freezes.
+          if [ -f live_scores.json ]; then
+            if ! python -c 'import json,sys,datetime as dt; new=json.load(open(sys.argv[1])); old=json.load(open(sys.argv[2])); live=any(x.get("live") for x in new.get("events",[])); stamp=dt.datetime.fromisoformat(old["updatedAt"].replace("Z","+00:00")); age=(dt.datetime.now(dt.timezone.utc)-stamp).total_seconds(); publish=(new["events"]!=old.get("events",[]) or (live and age>=900)); sys.exit(0 if publish else 1)' "$RUNNER_TEMP/live_scores.json" live_scores.json; then
+              echo 'Scoreboard unchanged; no commit needed.'
+              exit 0
+            fi
+          fi
+          cp "$RUNNER_TEMP/live_scores.json" live_scores.json
+          git add live_scores.json
+          if git diff --cached --quiet; then
+            echo 'No new live scores.'
+          else
+            git commit -m 'Refresh live football scores'
+            git push origin HEAD:refs/heads/live-scores
+          fi
+          echo 'Published to branch live-scores: live_scores.json'
