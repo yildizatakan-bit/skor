@@ -3,3 +3,10 @@
 /* v47: Shared date sections for All Matches and individual leagues */
 .match-date-heading{display:block;margin:19px 0 11px;padding:13px 17px;border-left:4px solid #4da3ff;border-radius:12px;background:#112a43;color:#e1eeff;font-size:17px;font-weight:800;letter-spacing:.1px}
 .match-date-heading:first-of-type{margin-top:14px}
+
+/* v48: All Matches market filter and probability ranking */
+.market-filter{display:grid;grid-template-columns:1fr;gap:7px;margin:13px 0 12px;padding:13px;border:1px solid #28445d;border-radius:14px;background:#0d2439}
+.market-filter label{color:#b9d0e7;font-size:12px;font-weight:750}
+.market-filter select{width:100%;min-width:0;padding:11px 12px;font-size:14px}
+.market-card-label{display:block!important;color:#70c9ff!important;font-weight:700;margin-top:5px}
+.market-card-prob{background:#064a37;color:#70f4b5;padding:9px 10px;border-radius:10px;font-size:16px;white-space:nowrap}
