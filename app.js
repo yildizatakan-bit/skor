@@ -38,10 +38,21 @@ function liveAnalysis(m){const base=state.analyses?.[m.id];return base||{ready:f
 function matchCard(m){let a=m.analysis;return `<button class="card match" data-open="${esc(m.id)}">${logo(m.home)}<div class="teams"><small>${esc(leagueName(m.league))} · ${m.done?'✓ TAMAMLANDI':m.live?'🔴 CANLI '+esc(m.clock||''):fmt(m.date)}</small><b>${esc(m.home.name)} – ${esc(m.away.name)}${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?' · '+m.home.score+'-'+m.away.score:''}</b></div>${a.ready?`<div class="mini"><span>%${percent(a.p.home)}</span><span>%${percent(a.p.draw)}</span><span>%${percent(a.p.away)}</span></div>`:'<span class="muted">Veri az</span>'}<span>›</span></button>`}
 function leagueTabs(){return `<div class="tabs"><button data-league="all" class="${state.league==='all'?'active':''}">Tümü</button>${LEAGUES.map(([id,name,flag])=>`<button data-league="${id}" class="${state.league===id?'active':''}">${flag} ${esc(name)}</button>`).join('')}</div>`}
 function matchDateLabel(date){return new Intl.DateTimeFormat('tr-TR',{timeZone:'Europe/Istanbul',day:'numeric',month:'long',weekday:'long'}).format(new Date(date))}
-function groupedMatchCards(items){let previous=null;return items.map(m=>{const day=istanbulDay(m.date);const header=day!==previous?`<div class="match-date-heading">${esc(matchDateLabel(m.date))}</div>`:'';previous=day;return header+matchCard(m)}).join('')}
+function groupedMatchCards(items){
+  // Share the home-page date headings across all match and league lists.
+  // Do not mutate the source array: it is also used by live-score updates.
+  const chronologically=[...items].sort((a,b)=>Date.parse(a.date)-Date.parse(b.date));
+  let previous=null;
+  return chronologically.map(m=>{
+    const day=istanbulDay(m.date);
+    const header=day!==previous?`<div class="match-date-heading">${esc(matchDateLabel(m.date))}</div>`:'';
+    previous=day;
+    return header+matchCard(m);
+  }).join('');
+}
 function home(){let all=available(),featured=featuredMatches(),idx=featured.length?((state.slide%featured.length)+featured.length)%featured.length:0;return `${leagueTabs()}<div class="sectionhead"><h2>🏆 ${featured.length&&istanbulDay(featured[0].date)!==istanbulDay(Date.now())?'Sıradaki Günün Maçları':'Günün Öne Çıkanları'}</h2><button class="link" data-page="matches">Tümünü gör ›</button></div>${featured.length?hero(featured[idx],idx,featured.length):`<div class="empty">${state.loading?'Maç verileri alınıyor…':'Son 10 maç verisi yeterli olan yaklaşan karşılaşma bulunamadı.'}</div>`}<div class="sectionhead"><h2>Canlı ve Yaklaşan Maçlar</h2><button class="link" data-page="matches">Tümünü gör ›</button></div>${all.length?groupedMatchCards(all.slice(0,8).sort((a,b)=>new Date(a.date)-new Date(b.date))):'<div class="empty">Bu ligde henüz maç bulunamadı.</div>'}`}
 
-function matches(){let all=available();return `<h1 class="heading">Tüm Maçlar</h1>${leagueTabs()}<div class="muted">Canlı, son 2 saatte tamamlanan ve gelecek 7 günün maçları · ${all.length} karşılaşma</div>${all.length?all.map(matchCard).join(''):'<div class="empty">Seçilen lig için maç bulunamadı.</div>'}`}
+function matches(){let all=available();const title=state.league==='all'?'Tüm Maçlar':`${leagueName(state.league)} Maçları`;return `<h1 class="heading">${esc(title)}</h1>${leagueTabs()}<div class="muted">Canlı, son 2 saatte tamamlanan ve gelecek 7 günün maçları · ${all.length} karşılaşma</div>${all.length?groupedMatchCards(all):'<div class="empty">Seçilen lig için maç bulunamadı.</div>'}`}
 function leagues(){return `<h1 class="heading">Ligler</h1><div class="leaguegrid">${LEAGUES.map(([id,name,flag])=>`<button data-leaguepage="${id}"><span>${flag}</span>${esc(name)}</button>`).join('')}</div>`}
 function marketRow(m,group,name,k,p){let id=m.id+'|'+k,saved=state.favs.some(x=>x.id===id);return `<div class="marketrow"><div><b>${esc(name)}</b><div class="muted">${esc(group)}</div></div><span class="pct">%${percent(p)}</span><button class="star ${saved?'saved':''}" data-fav="${esc(id)}" aria-label="Favorilere ekle">${saved?'★':'☆'}</button></div>`}
 function explainModel(m,a){
