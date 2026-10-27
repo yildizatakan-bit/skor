@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish current, verified player snapshots for upcoming fixtures only.
+"""Publish latest available ESPN season stats for upcoming fixture rosters.
 
 This is a data-quality and feature feed, NOT a trained player-impact model.
 Never backfills historical lineups, never changes past predictions or
@@ -77,7 +77,8 @@ def build(db, data, instant):
             continue
         stats_values = values[:len(FIELDS)]
         stat_at = values[len(FIELDS)]
-        # Do not confuse last season's totals with the current competition season.
+        # Align players to the latest observed ESPN season per competition.
+        # Latest available is NOT proof that the season is currently active.
         current = year is not None and year == league_years.get(league)
         stats = {field: numeric(value) if current else None
                  for field, value in zip(FIELDS, stats_values)}
@@ -109,6 +110,7 @@ def build(db, data, instant):
         output[f"{league}:{tid}"] = {
             "name": name, "league": league, "teamId": tid,
             "seasonYear": league_years.get(league),
+            "seasonStatus": "latest_available_unverified",
             "rosterPlayers": n,
             "verifiedSeasonGoalPlayers": len(goals),
             "verifiedSeasonAppearancePlayers": len(apps),
@@ -123,7 +125,7 @@ def build(db, data, instant):
         }
     return {
         "version": 1, "generatedAt": now(), "source": "ESPN rosters and season-scoped core statistics",
-        "scope": "Upcoming fixture teams only; current snapshot, not historical",
+        "scope": "Upcoming fixture teams only; latest available ESPN season snapshot, not historical",
         "teams": output,
         "coverage": {"upcomingTeams": len(teams), "teamsWithRosters": with_roster,
                      "teamsWithSeasonGoals": with_goals},
@@ -133,6 +135,7 @@ def build(db, data, instant):
             "marketValue": "Only values from licensed and attributed imports",
             "lineup": "Roster membership does not establish match starting XI",
             "model": "Descriptive only; not yet used to change Poisson or ML probabilities",
+            "seasonStatus": "Latest ESPN season year is not verified as currently active",
             "backtesting": "Never use a current player snapshot for past fixtures",
         }
     }
