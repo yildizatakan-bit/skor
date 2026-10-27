@@ -1,0 +1,79 @@
+name: Collect verified player season statistics
+on:
+  pull_request:
+    paths:
+      - 'scripts/enrich_player_season.py'
+      - 'scripts/build_player_team_features.py'
+      - 'scripts/test_player_features.py'
+      - '.github/workflows/collect-player-season.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '45 6 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: player-data-db-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  season:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Python syntax
+        run: python -m py_compile scripts/enrich_player_career.py scripts/enrich_player_season.py scripts/build_player_team_features.py
+      - name: Test missing stats and historical leakage protections
+        run: python scripts/test_player_features.py
+      - name: Collect latest ESPN season totals into separate player database
+        env:
+          SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '500' || '2000' }}
+          SEASON_STATS_WORKERS: '4'
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          python scripts/enrich_player_season.py
+          python scripts/build_player_team_features.py
+          after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          with open('player_season_coverage.json',encoding='utf-8') as f: r=json.load(f)
+          assert r['playerLeagueEntries'] > 1000, r
+          assert r['successfulSeasonEntries'] > 0, r
+          print('Verified season goals:',r['withGoals'],'players')
+          with open('player_team_features.json',encoding='utf-8') as f: teams=json.load(f)
+          assert teams['scope'].startswith('Upcoming'), teams
+          assert isinstance(teams['teams'], dict)
+          print('Upcoming team coverage:',teams['coverage'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-player-season-stats
+          path: |
+            player_data.sqlite3
+            player_season_coverage.json
+            player_team_features.json
+      - name: Persist only player data on same branch
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_season_coverage.json player_team_features.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update verified player season stats separately'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi

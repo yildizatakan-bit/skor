@@ -1,0 +1,80 @@
+name: Experimental ML 1X2 comparison
+on:
+  pull_request:
+    paths:
+      - 'scripts/train_ml.py'
+      - 'ml-comparison.js'
+      - 'index.html'
+      - 'sw.js'
+      - '.github/workflows/ml-comparison.yml'
+  push:
+    branches:
+      - feature/ml-comparison-20261027
+    paths:
+      - 'data.json'
+  workflow_dispatch:
+  schedule:
+    - cron: '35 7 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: experimental-ml-comparison-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated ML dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'scikit-learn>=1.4,<2'
+      - name: Verify JS syntax
+        run: node --check ml-comparison.js
+      - name: Verify historical SQLite is never modified by ML
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 prediction_history.json)"
+          python scripts/train_ml.py
+          after="$(sha256sum match_archive.sqlite3 prediction_history.json)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          for name in ('ml_predictions.json','ml_prediction_history.json','ml_metrics.json'):
+              with open(name,encoding='utf-8') as f: data=json.load(f)
+              assert isinstance(data,dict), name
+          with open('ml_metrics.json',encoding='utf-8') as f: report=json.load(f)
+          assert report['holdout']['matches'] >= 20, report
+          print('Read-only archive verified; ML holdout:',report['holdout'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ml-comparison-results
+          path: |
+            ml_predictions.json
+            ml_prediction_history.json
+            ml_metrics.json
+      - name: Persist only experimental ML outputs on checked-out branch
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ml_predictions.json ml_prediction_history.json ml_metrics.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update isolated ML predictions and metrics'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi

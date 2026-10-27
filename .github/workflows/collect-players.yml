@@ -1,0 +1,73 @@
+name: Collect all archived teams player data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 4 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: player-data-db-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify collector syntax
+        run: python -m py_compile scripts/update_players.py scripts/collect_all_players.py
+      - name: Collect verified player data without modifying historical archive
+        env:
+          PLAYER_WORKERS: '5'
+          PLAYER_TOTAL_LIMIT: '2000'
+          PLAYER_RETRY_HOURS: '48'
+          PLAYER_REFRESH_DAYS: '7'
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          python scripts/collect_all_players.py
+          after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          with open('player_coverage.json',encoding='utf-8') as f:
+              report=json.load(f)
+          print('Player collection coverage:', report['successfulTeamEntries'], '/', report['targetTeamEntries'])
+          assert report['targetTeamEntries'] > 0
+          if report['playerRows'] == 0:
+              print('WARNING: No player rosters could be fetched in this sample; inspect the failed teams')
+          assert report['playerRows'] > 0, 'Player source returned no usable rosters in the sample'
+          PY
+      - name: Inspect ESPN soccer player statistics availability
+        run: python scripts/probe_player_stats.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: player-data-and-coverage
+          path: |
+            player_data.sqlite3
+            player_features.json
+            player_coverage.json
+      - name: Commit isolated player data to the same branch (never the match archive)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_features.json player_coverage.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update isolated player data and coverage'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi

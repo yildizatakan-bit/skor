@@ -1,0 +1,98 @@
+name: Freeze prospective player signals
+on:
+  pull_request:
+    paths:
+      - 'scripts/track_player_signals.py'
+      - 'scripts/test_track_player_signals.py'
+      - 'scripts/evaluate_player_increment.py'
+      - 'scripts/test_evaluate_player_increment.py'
+      - 'scripts/research_health.py'
+      - 'scripts/test_research_health.py'
+      - '.github/workflows/player-signals.yml'
+  push:
+    branches:
+      - feature/ml-comparison-20261027
+    paths:
+      - 'player_team_features.json'
+      - 'data.json'
+      - 'ml_predictions.json'
+  workflow_dispatch:
+  schedule:
+    - cron: '5 8 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: prospective-player-signals-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install experimental calibration dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'scikit-learn>=1.4,<2'
+      - name: Syntax and forward-only regression tests
+        run: |
+          python -m py_compile scripts/track_player_signals.py scripts/test_track_player_signals.py scripts/evaluate_player_increment.py scripts/test_evaluate_player_increment.py scripts/research_health.py scripts/test_research_health.py
+          python scripts/test_track_player_signals.py
+          python scripts/test_evaluate_player_increment.py
+          python scripts/test_research_health.py
+      - name: Freeze only pre-kickoff features, preserve historical data
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 prediction_history.json)"
+          python scripts/track_player_signals.py
+          python scripts/evaluate_player_increment.py
+          python scripts/research_health.py
+          after="$(sha256sum match_archive.sqlite3 prediction_history.json)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          with open('player_signal_history.json',encoding='utf-8') as f: history=json.load(f)
+          with open('player_signal_metrics.json',encoding='utf-8') as f: metrics=json.load(f)
+          assert isinstance(history['snapshots'],list)
+          assert isinstance(history['settlements'],list)
+          assert isinstance(history['modelSnapshots'],list)
+          assert metrics['frozenMatches']==len(history['snapshots'])
+          with open('player_increment_validation.json',encoding='utf-8') as f: validation=json.load(f)
+          assert set(validation['models'])=={'classic','ml'}, validation
+          for item in validation['models'].values():
+              assert item['eligibleSettled'] <= metrics['settledMatches'], item
+          print('Immutable player snapshots:',metrics['frozenMatches'])
+          print('Settled:',metrics['settledMatches'])
+          print('Frozen ML:',metrics['mlFrozen'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prospective-player-signals
+          path: |
+            player_signal_history.json
+            player_signal_metrics.json
+            player_increment_validation.json
+            research_health.json
+      - name: Commit only separate prospective snapshots
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json research_health.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Freeze prospective player features for future validation'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi
