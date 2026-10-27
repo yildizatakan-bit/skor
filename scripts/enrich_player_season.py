@@ -96,8 +96,9 @@ def main():
     try:
         init(db)
         db.commit()
-        status = {(league, pid): (stamp, success) for league, pid, stamp, success
-                  in db.execute("SELECT league,player_id,checked_at,success FROM season_stats_status")}
+        status = {(league, pid): (stamp, success, error)
+                  for league, pid, stamp, success, error in db.execute(
+                      "SELECT league,player_id,checked_at,success,error FROM season_stats_status")}
         now_dt = datetime.now(UTC)
         # Fetch upcoming-match players first; the archive's historical teams
         # must not monopolize the queue in alphabetical league order.
@@ -108,8 +109,12 @@ def main():
             previous = status.get((league, pid))
             if previous:
                 try:
+                    # A verified 404 is unlikely to be repaired in 48 hours.
+                    # Do not repeatedly hammer missing ESPN athlete endpoints.
+                    retry_days = (7 if previous[1] else
+                                  30 if previous[2] and "404" in previous[2] else 2)
                     if now_dt - datetime.fromisoformat(previous[0]) < timedelta(
-                            days=7 if previous[1] else 2):
+                            days=retry_days):
                         continue
                 except (ValueError, TypeError):
                     pass
@@ -165,6 +170,22 @@ def main():
                    FROM player_season_stats""").fetchone()
         total = db.execute("SELECT COUNT(*) FROM (SELECT DISTINCT league,player_id FROM players)").fetchone()[0]
         checked = db.execute("SELECT COUNT(*) FROM season_stats_status").fetchone()[0]
+        failures = {}
+        for (error,) in db.execute(
+                "SELECT error FROM season_stats_status WHERE success=0"):
+            if not error:
+                reason = "unknown"
+            elif "404" in error:
+                reason = "HTTP 404"
+            elif "429" in error:
+                reason = "HTTP 429"
+            elif "no current-season statistics link" in error:
+                reason = "no season link"
+            elif "no numeric current-season stats" in error:
+                reason = "no numeric stats"
+            else:
+                reason = "other provider error"
+            failures[reason] = failures.get(reason, 0) + 1
         report = {
             "updatedAt": now(), "source": "ESPN core soccer statisticslog season links",
             "playerLeagueEntries": total, "checkedEntries": checked,
@@ -172,6 +193,7 @@ def main():
             "withAssists": row[2] or 0, "withAppearances": row[3] or 0,
             "attemptedThisRun": len(pending), "successfulThisRun": succeeded,
             "upcomingPriorityThisRun": priority_count,
+            "failedReasonCounts": failures,
             "warning": "These are ESPN season-year totals, NOT verified currently active season or last-five-match form; do not use snapshots for matches predating the fetch timestamp.",
         }
         (ROOT / "player_season_coverage.json").write_text(
