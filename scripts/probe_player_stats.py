@@ -54,6 +54,15 @@ def main():
                     print("OFFENSIVE_KEYS " + json.dumps(
                         [x.get("name") for x in cat.get("stats", []) if isinstance(x, dict)],
                         ensure_ascii=False), flush=True)
+            try:
+                logurl = url.replace("/statistics", "/statisticslog")
+                game_log = get_json(logurl)
+                print("GAMELOG_SHAPE " + json.dumps({
+                    "keys": list(game_log),
+                    "sample": shape(game_log, depth=1)
+                }, ensure_ascii=False)[:2800], flush=True)
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                print("GAMELOG_UNAVAILABLE " + str(exc), flush=True)
             for label, alternative in [
                 ("SEASON_QUERY", url + "?season=2026"),
                 ("SEASON_PATH", "https://sports.core.api.espn.com/v2/sports/soccer/leagues/"
