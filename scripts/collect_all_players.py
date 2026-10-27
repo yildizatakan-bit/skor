@@ -154,6 +154,9 @@ def main():
             pending.append(item)
         pending = pending[:LIMIT]
         print(f"Due for fetch: {len(pending)} / {len(targets)}", flush=True)
+        if not pending and (ROOT / "player_coverage.json").is_file():
+            print("No player refresh due; preserve existing database and coverage without rewriting", flush=True)
+            return
         market = p.licensed_market_values()
         successes = 0
         if pending:
