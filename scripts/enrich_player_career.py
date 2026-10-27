@@ -117,6 +117,7 @@ def main():
                 break
         print(f"Career stats due: {len(pending)}; max batch {BATCH}", flush=True)
         successful = 0
+        processed = 0
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             futures = [pool.submit(get_one, league, pid) for league, pid in pending]
             for future in as_completed(futures):
@@ -147,7 +148,8 @@ def main():
                     checked_at=excluded.checked_at,success=excluded.success,
                     error=excluded.error""",
                     (league,pid,stamp,success,error))
-                if (successful + (len(pending) - successful)) % 200 == 0:
+                processed += 1
+                if processed % 200 == 0:
                     db.commit()
         db.commit()
         row = db.execute("""SELECT COUNT(*),SUM(goals IS NOT NULL),SUM(assists IS NOT NULL),
