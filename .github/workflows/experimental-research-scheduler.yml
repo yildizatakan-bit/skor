@@ -37,6 +37,7 @@ jobs:
           python scripts/test_player_features.py
           python scripts/test_track_player_signals.py
           python scripts/test_evaluate_player_increment.py
+          python scripts/test_research_health.py
       - name: Use latest production inputs ONLY in disposable working tree
         shell: bash
         run: |
@@ -63,6 +64,7 @@ jobs:
           python scripts/train_ml.py
           python scripts/track_player_signals.py
           python scripts/evaluate_player_increment.py
+          python scripts/research_health.py
           sha256sum -c /tmp/research-input-sha256
           python - <<'PY'
           import json
@@ -92,6 +94,7 @@ jobs:
             player_season_coverage.json
             player_signal_metrics.json
             player_increment_validation.json
+            research_health.json
             ml_metrics.json
       - name: Commit ONLY experimental outputs to experimental branch
         shell: bash
@@ -104,7 +107,7 @@ jobs:
           git add player_features.json player_coverage.json
           git add player_season_coverage.json player_team_features.json
           git add ml_predictions.json ml_prediction_history.json ml_metrics.json
-          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json
+          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json research_health.json
           if ! git diff --cached --quiet; then
             git commit -m 'Update isolated research from read-only main inputs'
             pushed=0
