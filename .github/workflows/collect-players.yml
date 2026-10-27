@@ -63,6 +63,11 @@ jobs:
           git add player_features.json player_coverage.json
           if ! git diff --cached --quiet; then
             git commit -m 'Update isolated player data and coverage'
-            git pull --rebase
-            git push
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
           fi
