@@ -57,6 +57,9 @@ def main():
             try:
                 logurl = url.replace("/statistics", "/statisticslog")
                 game_log = get_json(logurl)
+                first = (game_log.get("entries") or [{}])[0]
+                print("GAMELOG_FIRST " + json.dumps(
+                    first, ensure_ascii=False)[:3200], flush=True)
                 print("GAMELOG_SHAPE " + json.dumps({
                     "keys": list(game_log),
                     "sample": shape(game_log, depth=1)
