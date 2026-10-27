@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verified CURRENT-SEASON player statistics from ESPN soccer statisticslog.
+"""Latest-available ESPN season player statistics from soccer statisticslog.
 
 The latest season is resolved from ESPN's own per-player statisticslog rather
 than guessed from calendar year. Never modifies historical match archive.
@@ -172,7 +172,7 @@ def main():
             "withAssists": row[2] or 0, "withAppearances": row[3] or 0,
             "attemptedThisRun": len(pending), "successfulThisRun": succeeded,
             "upcomingPriorityThisRun": priority_count,
-            "warning": "These are verified season totals, NOT last-five-match form; do not use snapshots for matches predating the fetch timestamp.",
+            "warning": "These are ESPN season-year totals, NOT verified currently active season or last-five-match form; do not use snapshots for matches predating the fetch timestamp.",
         }
         (ROOT / "player_season_coverage.json").write_text(
             json.dumps(report, ensure_ascii=False, separators=(",", ":")), "utf-8")
