@@ -16,11 +16,12 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -29,7 +30,7 @@ jobs:
       - name: Collect verified player data without modifying historical archive
         env:
           PLAYER_WORKERS: '5'
-          PLAYER_TOTAL_LIMIT: ${{ github.event_name == 'pull_request' && '12' || '2000' }}
+          PLAYER_TOTAL_LIMIT: '2000'
           PLAYER_RETRY_HOURS: '48'
           PLAYER_REFRESH_DAYS: '7'
         shell: bash
@@ -56,8 +57,8 @@ jobs:
             player_data.sqlite3
             player_features.json
             player_coverage.json
-      - name: Commit isolated player database only on default branch
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      - name: Commit isolated player data to the same branch (never the match archive)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
