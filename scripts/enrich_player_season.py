@@ -103,6 +103,16 @@ def main():
         # Fetch upcoming-match players first; the archive's historical teams
         # must not monopolize the queue in alphabetical league order.
         priority_teams = {(league, tid) for league, tid, _ in teams_from_snapshot()}
+        # Prioritize competitions where ESPN actually supplies season stats,
+        # while still sampling untested competitions with a neutral prior.
+        league_counts = {
+            league: (int(checked), int(successes or 0))
+            for league, checked, successes in db.execute(
+                "SELECT league,COUNT(*),SUM(success) FROM season_stats_status GROUP BY league")
+        }
+        def league_quality(league):
+            checked, successes = league_counts.get(league, (0, 0))
+            return (successes + 2) / (checked + 4)
         candidates = {}
         for league, team_id, pid in db.execute(
                 "SELECT league,team_id,player_id FROM players"):
@@ -122,7 +132,7 @@ def main():
             is_priority = (league, team_id) in priority_teams
             candidates[key] = candidates.get(key, False) or is_priority
         pending = sorted(candidates, key=lambda key: (
-            not candidates[key], key[0], key[1]))[:BATCH]
+            not candidates[key], -league_quality(key[0]), key[0], key[1]))[:BATCH]
         priority_count = sum(bool(candidates[key]) for key in pending)
         print(f"Season stats due: {len(pending)}; upcoming-team priority: {priority_count}; "
               f"priority teams: {len(priority_teams)}", flush=True)
@@ -194,6 +204,13 @@ def main():
             "attemptedThisRun": len(pending), "successfulThisRun": succeeded,
             "upcomingPriorityThisRun": priority_count,
             "failedReasonCounts": failures,
+            "leagueCoverage": [
+                {"league": league, "checked": checked,
+                 "successful": successes, "successRate": round(successes / checked, 4)}
+                for league, checked, successes in db.execute(
+                    "SELECT league,COUNT(*),SUM(success) FROM season_stats_status "
+                    "GROUP BY league ORDER BY league")
+            ],
             "warning": "These are ESPN season-year totals, NOT verified currently active season or last-five-match form; do not use snapshots for matches predating the fetch timestamp.",
         }
         (ROOT / "player_season_coverage.json").write_text(
