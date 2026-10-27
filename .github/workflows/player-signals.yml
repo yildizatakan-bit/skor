@@ -58,6 +58,10 @@ jobs:
           assert isinstance(history['settlements'],list)
           assert isinstance(history['modelSnapshots'],list)
           assert metrics['frozenMatches']==len(history['snapshots'])
+          with open('player_increment_validation.json',encoding='utf-8') as f: validation=json.load(f)
+          assert set(validation['models'])=={'classic','ml'}, validation
+          for item in validation['models'].values():
+              assert item['eligibleSettled'] <= metrics['settledMatches'], item
           print('Immutable player snapshots:',metrics['frozenMatches'])
           print('Settled:',metrics['settledMatches'])
           print('Frozen ML:',metrics['mlFrozen'])
