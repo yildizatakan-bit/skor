@@ -1,0 +1,64 @@
+name: Collect player career statistics
+on:
+  pull_request:
+    paths:
+      - 'scripts/enrich_player_career.py'
+      - '.github/workflows/collect-player-career.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '15 6 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: career-player-stats-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify source parser syntax
+        run: python -m py_compile scripts/enrich_player_career.py
+      - name: Fetch independently labeled career statistics
+        env:
+          CAREER_STATS_BATCH: ${{ github.event_name == 'pull_request' && '300' || '2000' }}
+          CAREER_STATS_WORKERS: '6'
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          python scripts/enrich_player_career.py
+          after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          with open('player_career_coverage.json',encoding='utf-8') as f: r=json.load(f)
+          assert r['playerLeagueEntries'] > 1000, r
+          assert r['successfulEntries'] > 0, r
+          print('Career goal/assist coverage:',r['withGoals'],r['withAssists'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: player-career-stats
+          path: |
+            player_data.sqlite3
+            player_career_coverage.json
+      - name: Persist only separate player statistics files on same branch
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_career_coverage.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update player career statistics without changing match archive'
+            git pull --rebase
+            git push
+          fi
