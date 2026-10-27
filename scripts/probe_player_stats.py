@@ -39,6 +39,21 @@ def main():
         )
         try:
             result = get_json(url)
+            categories = result.get("splits", {}).get("categories", [])
+            for cat in categories[:6]:
+                if isinstance(cat, dict):
+                    print("STATS_CATEGORY " + json.dumps({
+                        "name": cat.get("name"), "displayName": cat.get("displayName"),
+                        "keys": list(cat),
+                        "stats": cat.get("stats", [])[:18],
+                        "names": cat.get("names", [])[:18],
+                        "labels": cat.get("labels", [])[:18],
+                    }, ensure_ascii=False)[:3500], flush=True)
+            print("STATS_META " + json.dumps({
+                "keys": list(result), "season": result.get("season"),
+                "seasonType": result.get("seasonType"),
+                "splitKeys": list(result.get("splits", {}))
+            }, ensure_ascii=False)[:1400], flush=True)
             print(f"STATS_PROBE {league} athlete={athlete_id}: "
                   + json.dumps(shape(result), ensure_ascii=False)[:2200], flush=True)
         except (OSError, ValueError, urllib.error.URLError) as exc:
