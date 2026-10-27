@@ -6,6 +6,8 @@ on:
       - 'scripts/test_track_player_signals.py'
       - 'scripts/evaluate_player_increment.py'
       - 'scripts/test_evaluate_player_increment.py'
+      - 'scripts/research_health.py'
+      - 'scripts/test_research_health.py'
       - '.github/workflows/player-signals.yml'
   push:
     branches:
@@ -38,9 +40,10 @@ jobs:
         run: python -m pip install 'numpy>=1.26,<3' 'scikit-learn>=1.4,<2'
       - name: Syntax and forward-only regression tests
         run: |
-          python -m py_compile scripts/track_player_signals.py scripts/test_track_player_signals.py scripts/evaluate_player_increment.py scripts/test_evaluate_player_increment.py
+          python -m py_compile scripts/track_player_signals.py scripts/test_track_player_signals.py scripts/evaluate_player_increment.py scripts/test_evaluate_player_increment.py scripts/research_health.py scripts/test_research_health.py
           python scripts/test_track_player_signals.py
           python scripts/test_evaluate_player_increment.py
+          python scripts/test_research_health.py
       - name: Freeze only pre-kickoff features, preserve historical data
         shell: bash
         run: |
@@ -48,6 +51,7 @@ jobs:
           before="$(sha256sum match_archive.sqlite3 prediction_history.json)"
           python scripts/track_player_signals.py
           python scripts/evaluate_player_increment.py
+          python scripts/research_health.py
           after="$(sha256sum match_archive.sqlite3 prediction_history.json)"
           test "$before" = "$after"
           python - <<'PY'
@@ -73,6 +77,7 @@ jobs:
             player_signal_history.json
             player_signal_metrics.json
             player_increment_validation.json
+            research_health.json
       - name: Commit only separate prospective snapshots
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         shell: bash
@@ -80,7 +85,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json
+          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json research_health.json
           if ! git diff --cached --quiet; then
             git commit -m 'Freeze prospective player features for future validation'
             pushed=0
