@@ -4,6 +4,7 @@ on:
     paths:
       - 'scripts/collect_all_players.py'
       - 'scripts/update_players.py'
+      - 'scripts/probe_player_stats.py'
       - '.github/workflows/collect-players.yml'
   workflow_dispatch:
   schedule:
@@ -50,6 +51,8 @@ jobs:
               print('WARNING: No player rosters could be fetched in this sample; inspect the failed teams')
           assert report['playerRows'] > 0, 'Player source returned no usable rosters in the sample'
           PY
+      - name: Inspect ESPN soccer player statistics availability
+        run: python scripts/probe_player_stats.py
       - uses: actions/upload-artifact@v4
         with:
           name: player-data-and-coverage
