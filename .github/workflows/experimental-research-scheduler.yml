@@ -1,0 +1,116 @@
+name: Scheduled isolated player and ML research
+# Schedules only run from the repository's DEFAULT branch. This workflow
+# lives on main but checks out the experimental branch and NEVER pushes to main.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 5,17 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: scheduled-isolated-player-research
+  cancel-in-progress: false
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Checkout experimental branch, not main
+        uses: actions/checkout@v4
+        with:
+          ref: feature/ml-comparison-20261027
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated ML dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'scikit-learn>=1.4,<2'
+      - name: Run regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/test_player_features.py
+          python scripts/test_track_player_signals.py
+          python scripts/test_evaluate_player_increment.py
+      - name: Use latest production inputs ONLY in disposable working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:data.json > data.json
+          git show origin/main:match_archive.sqlite3 > match_archive.sqlite3
+          sha256sum match_archive.sqlite3 prediction_history.json > /tmp/research-input-sha256
+          echo 'Experimental research uses fresh main inputs without committing them.'
+      - name: Refresh isolated rosters, season stats, and ML forecasts
+        env:
+          PLAYER_WORKERS: '4'
+          PLAYER_TOTAL_LIMIT: '35'
+          PLAYER_RETRY_HOURS: '48'
+          PLAYER_REFRESH_DAYS: '7'
+          SEASON_STATS_BATCH: '250'
+          SEASON_STATS_WORKERS: '4'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/collect_all_players.py
+          python scripts/enrich_player_season.py
+          python scripts/build_player_team_features.py
+          python scripts/train_ml.py
+          python scripts/track_player_signals.py
+          python scripts/evaluate_player_increment.py
+          sha256sum -c /tmp/research-input-sha256
+          python - <<'PY'
+          import json
+          with open('player_signal_metrics.json', encoding='utf-8') as f: signals=json.load(f)
+          with open('player_increment_validation.json', encoding='utf-8') as f: comparison=json.load(f)
+          assert set(comparison['models'])=={'classic','ml'}
+          assert signals['frozenMatches'] >= signals['settledMatches']
+          print('Prospective snapshots:', signals['frozenMatches'])
+          print('Settled:', signals['settledMatches'])
+          print('ML frozen:', signals['mlFrozen'])
+          print('Player-impact evaluation:', {
+              name: {'eligible': r['eligibleSettled'], 'ready': r['ready']}
+              for name,r in comparison['models'].items()})
+          PY
+      - name: Restore production inputs in experiment working tree before committing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore -- data.json match_archive.sqlite3
+          test -z "$(git diff -- data.json match_archive.sqlite3 prediction_history.json)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isolated-research-cycle
+          retention-days: 14
+          path: |
+            player_coverage.json
+            player_season_coverage.json
+            player_signal_metrics.json
+            player_increment_validation.json
+            ml_metrics.json
+      - name: Commit ONLY experimental outputs to experimental branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'feature/ml-comparison-20261027'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_features.json player_coverage.json
+          git add player_season_coverage.json player_team_features.json
+          git add ml_predictions.json ml_prediction_history.json ml_metrics.json
+          git add player_signal_history.json player_signal_metrics.json player_increment_validation.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update isolated research from read-only main inputs'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin feature/ml-comparison-20261027
+              if git push origin HEAD:feature/ml-comparison-20261027; then
+                pushed=1
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi
