@@ -116,6 +116,9 @@ def main():
             if len(pending) >= BATCH:
                 break
         print(f"Career stats due: {len(pending)}; max batch {BATCH}", flush=True)
+        if not pending and (ROOT / "player_career_coverage.json").is_file():
+            print("No career refresh due; preserving existing outputs", flush=True)
+            return
         successful = 0
         processed = 0
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
