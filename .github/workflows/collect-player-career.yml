@@ -1,9 +1,5 @@
 name: Collect player career statistics
 on:
-  pull_request:
-    paths:
-      - 'scripts/enrich_player_career.py'
-      - '.github/workflows/collect-player-career.yml'
   workflow_dispatch:
   schedule:
     - cron: '15 6 * * *'
