@@ -10,7 +10,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: career-player-stats-${{ github.ref }}
+  group: player-data-db-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: false
 jobs:
   enrich:
