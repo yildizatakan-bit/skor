@@ -113,9 +113,20 @@ def main():
         def league_quality(league):
             checked, successes = league_counts.get(league, (0, 0))
             return (successes + 2) / (checked + 4)
+        # ESPN exposes rosters for some cup competitions but no season-level
+        # player statistics. After 100 independent failures, stop wasting
+        # thousands of queries. Allow explicit manual re-probing if fixed.
+        unsupported = {
+            league for league, (checked, successes) in league_counts.items()
+            if checked >= 100 and successes == 0
+        }
+        if os.getenv("SEASON_FORCE_UNSUPPORTED") == "1":
+            unsupported.clear()
         candidates = {}
         for league, team_id, pid in db.execute(
                 "SELECT league,team_id,player_id FROM players"):
+            if league in unsupported:
+                continue
             previous = status.get((league, pid))
             if previous:
                 try:
@@ -204,6 +215,8 @@ def main():
             "attemptedThisRun": len(pending), "successfulThisRun": succeeded,
             "upcomingPriorityThisRun": priority_count,
             "failedReasonCounts": failures,
+            "unsupportedLeagues": sorted(unsupported),
+            "unsupportedLeagueRule": "At least 100 attempted and zero successful season stats; manual override SEASON_FORCE_UNSUPPORTED=1",
             "leagueCoverage": [
                 {"league": league, "checked": checked,
                  "successful": successes, "successRate": round(successes / checked, 4)}
