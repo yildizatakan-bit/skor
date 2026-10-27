@@ -143,6 +143,16 @@ def freeze(event, feature_feed, classic, ml, now):
     }
 
 
+def ml_before_kickoff(entry, kickoff, now):
+    """Accept ML probabilities only with a documented pre-kickoff creation time."""
+    if not isinstance(entry, dict) or not valid_probabilities(entry.get("p")):
+        return False
+    source_time = instant(entry.get("recordedAt"))
+    source_kickoff = instant(entry.get("kickoff"))
+    return bool(source_time and source_kickoff and source_kickoff == kickoff
+                and source_time <= now and source_time < kickoff)
+
+
 def finished_archive():
     path = ROOT / "match_archive.sqlite3"
     if not path.is_file():
@@ -196,15 +206,19 @@ def probability_metrics(pairs):
             "brier": round(brier/n, 5), "logLoss": round(logloss/n, 5)}
 
 
-def build_report(snapshots, settlements, now):
+def build_report(snapshots, settlements, now, model_snapshots=None):
     completed = {x["matchId"]: x for x in settlements}
+    supplements = {(x["matchId"], x["model"]): x["p"]
+                   for x in (model_snapshots or []) if valid_probabilities(x.get("p"))}
     classic, ml, common_classic, common_ml = [], [], [], []
     directional = []
     for snap in snapshots:
         result = completed.get(snap["matchId"])
         if result is None:
             continue
-        probs = snap.get("probabilities") or {}
+        probs = dict(snap.get("probabilities") or {})
+        if "ml" not in probs and (snap["matchId"], "ml") in supplements:
+            probs["ml"] = supplements[(snap["matchId"], "ml")]
         if valid_probabilities(probs.get("classic")):
             classic.append((probs["classic"], result["outcome"]))
         if valid_probabilities(probs.get("ml")):
@@ -220,7 +234,9 @@ def build_report(snapshots, settlements, now):
         "version": 1, "generatedAt": now.isoformat(),
         "frozenMatches": len(snapshots), "settledMatches": len(settlements),
         "classicFrozen": sum("classic" in (s.get("probabilities") or {}) for s in snapshots),
-        "mlFrozen": sum("ml" in (s.get("probabilities") or {}) for s in snapshots),
+        "mlFrozen": sum("ml" in (s.get("probabilities") or {}) or
+                        (s["matchId"], "ml") in supplements for s in snapshots),
+        "supplementalMLFrozen": len(model_snapshots or []),
         "classic": probability_metrics(classic), "ml": probability_metrics(ml),
         "pairedComparison": {
             "sameMatches": len(common_ml),
@@ -243,6 +259,7 @@ def process(data, feed, old, archive, ml_predictions, now):
         old = {}
     snapshots = list(old.get("snapshots") or [])
     settlements = list(old.get("settlements") or [])
+    model_snapshots = list(old.get("modelSnapshots") or [])
     ids = {s["matchId"] for s in snapshots}
     settled = {s["matchId"] for s in settlements}
     events = data.get("events") or []
@@ -255,10 +272,37 @@ def process(data, feed, old, archive, ml_predictions, now):
             continue
         analysis = analyses.get(mid) or {}
         ml_entry = ml_predictions.get(mid) or {}
-        candidate = freeze(event, feed, analysis.get("p"), ml_entry.get("p"), now)
+        ml_p = (ml_entry.get("p") if ml_before_kickoff(
+            ml_entry, instant(event.get("date")), now) else None)
+        candidate = freeze(event, feed, analysis.get("p"), ml_p, now)
         if candidate is not None:
             snapshots.append(candidate)
             ids.add(mid)
+    # A later-arriving ML forecast can be frozen independently BEFORE kickoff.
+    # Never mutate the original player snapshot or attach post-kickoff forecasts.
+    original = {s["matchId"]: s for s in snapshots}
+    already_ml = {x["matchId"] for x in model_snapshots if x.get("model") == "ml"}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        mid = str(event.get("id") or "")
+        snap = original.get(mid)
+        if not snap or mid in already_ml or "ml" in (snap.get("probabilities") or {}):
+            continue
+        kickoff = instant(snap["kickoff"])
+        if (not kickoff or now >= kickoff or event.get("done") or event.get("live")
+                or instant(event.get("date")) != kickoff
+                or event.get("league") != snap["league"]):
+            continue
+        entry = ml_predictions.get(mid) or {}
+        if not ml_before_kickoff(entry, kickoff, now):
+            continue
+        model_snapshots.append({
+            "matchId": mid, "model": "ml", "kickoff": kickoff.isoformat(),
+            "frozenAt": now.isoformat(), "sourceRecordedAt": entry["recordedAt"],
+            "p": {k: round(entry["p"][k], 7) for k in LABELS},
+        })
+        already_ml.add(mid)
     finished = {str(m["id"]): m for m in events
                 if isinstance(m, dict) and m.get("id") and score(m) is not None}
     finished.update(archive)
@@ -270,8 +314,9 @@ def process(data, feed, old, archive, ml_predictions, now):
         if result is not None:
             settlements.append(result)
             settled.add(mid)
-    ledger = {"version": 1, "snapshots": snapshots, "settlements": settlements}
-    return ledger, build_report(snapshots, settlements, now)
+    ledger = {"version": 1, "snapshots": snapshots, "settlements": settlements,
+              "modelSnapshots": model_snapshots}
+    return ledger, build_report(snapshots, settlements, now, model_snapshots)
 
 
 def main():
