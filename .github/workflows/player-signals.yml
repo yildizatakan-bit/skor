@@ -11,6 +11,7 @@ on:
     paths:
       - 'player_team_features.json'
       - 'data.json'
+      - 'ml_predictions.json'
   workflow_dispatch:
   schedule:
     - cron: '5 8 * * *'
@@ -49,9 +50,11 @@ jobs:
           with open('player_signal_metrics.json',encoding='utf-8') as f: metrics=json.load(f)
           assert isinstance(history['snapshots'],list)
           assert isinstance(history['settlements'],list)
+          assert isinstance(history['modelSnapshots'],list)
           assert metrics['frozenMatches']==len(history['snapshots'])
           print('Immutable player snapshots:',metrics['frozenMatches'])
           print('Settled:',metrics['settledMatches'])
+          print('Frozen ML:',metrics['mlFrozen'])
           PY
       - uses: actions/upload-artifact@v4
         with:
