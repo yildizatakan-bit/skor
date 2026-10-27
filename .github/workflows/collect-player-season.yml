@@ -4,6 +4,7 @@ on:
     paths:
       - 'scripts/enrich_player_season.py'
       - 'scripts/build_player_team_features.py'
+      - 'scripts/test_player_features.py'
       - '.github/workflows/collect-player-season.yml'
   workflow_dispatch:
   schedule:
@@ -27,6 +28,8 @@ jobs:
           python-version: '3.12'
       - name: Verify Python syntax
         run: python -m py_compile scripts/enrich_player_career.py scripts/enrich_player_season.py scripts/build_player_team_features.py
+      - name: Test missing stats and historical leakage protections
+        run: python scripts/test_player_features.py
       - name: Collect latest ESPN season totals into separate player database
         env:
           SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '2500' || '2000' }}
