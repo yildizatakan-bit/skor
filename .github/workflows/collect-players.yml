@@ -1,0 +1,62 @@
+name: Collect all archived teams player data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 4 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: player-data-collection
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify collector syntax
+        run: python -m py_compile scripts/update_players.py scripts/collect_all_players.py
+      - name: Collect verified player data without modifying historical archive
+        env:
+          PLAYER_WORKERS: '5'
+          PLAYER_TOTAL_LIMIT: '2000'
+          PLAYER_RETRY_HOURS: '48'
+          PLAYER_REFRESH_DAYS: '7'
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          python scripts/collect_all_players.py
+          after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          with open('player_coverage.json',encoding='utf-8') as f:
+              report=json.load(f)
+          print('Player collection coverage:', report['successfulTeamEntries'], '/', report['targetTeamEntries'])
+          assert report['targetTeamEntries'] > 0
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: player-data-and-coverage
+          path: |
+            player_data.sqlite3
+            player_features.json
+            player_coverage.json
+      - name: Commit isolated player database only on default branch
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_features.json player_coverage.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update isolated player data and coverage'
+            git pull --rebase
+            git push
+          fi
