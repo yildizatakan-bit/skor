@@ -14,7 +14,7 @@ import os
 import re
 import sqlite3
 
-from update_players import ROOT, DB_PATH, get_json, now
+from update_players import ROOT, DB_PATH, get_json, now, teams_from_snapshot
 from enrich_player_career import parse_stats
 
 BATCH = max(1, min(3000, int(os.getenv("SEASON_STATS_BATCH", "500"))))
@@ -99,9 +99,12 @@ def main():
         status = {(league, pid): (stamp, success) for league, pid, stamp, success
                   in db.execute("SELECT league,player_id,checked_at,success FROM season_stats_status")}
         now_dt = datetime.now(UTC)
-        pending = []
-        for league, pid in db.execute(
-                "SELECT DISTINCT league,player_id FROM players ORDER BY league,player_id"):
+        # Fetch upcoming-match players first; the archive's historical teams
+        # must not monopolize the queue in alphabetical league order.
+        priority_teams = {(league, tid) for league, tid, _ in teams_from_snapshot()}
+        candidates = {}
+        for league, team_id, pid in db.execute(
+                "SELECT league,team_id,player_id FROM players"):
             previous = status.get((league, pid))
             if previous:
                 try:
@@ -110,10 +113,14 @@ def main():
                         continue
                 except (ValueError, TypeError):
                     pass
-            pending.append((league, pid))
-            if len(pending) >= BATCH:
-                break
-        print(f"Season stats due: {len(pending)}", flush=True)
+            key = (league, pid)
+            is_priority = (league, team_id) in priority_teams
+            candidates[key] = candidates.get(key, False) or is_priority
+        pending = sorted(candidates, key=lambda key: (
+            not candidates[key], key[0], key[1]))[:BATCH]
+        priority_count = sum(bool(candidates[key]) for key in pending)
+        print(f"Season stats due: {len(pending)}; upcoming-team priority: {priority_count}; "
+              f"priority teams: {len(priority_teams)}", flush=True)
         if not pending and (ROOT / "player_season_coverage.json").is_file():
             print("No season stats refresh due", flush=True)
             return
@@ -164,6 +171,7 @@ def main():
             "successfulSeasonEntries": row[0], "withGoals": row[1] or 0,
             "withAssists": row[2] or 0, "withAppearances": row[3] or 0,
             "attemptedThisRun": len(pending), "successfulThisRun": succeeded,
+            "upcomingPriorityThisRun": priority_count,
             "warning": "These are verified season totals, NOT last-five-match form; do not use snapshots for matches predating the fetch timestamp.",
         }
         (ROOT / "player_season_coverage.json").write_text(
