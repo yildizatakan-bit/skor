@@ -1,11 +1,5 @@
 name: Collect all archived teams player data
 on:
-  pull_request:
-    paths:
-      - 'scripts/collect_all_players.py'
-      - 'scripts/update_players.py'
-      - 'scripts/probe_player_stats.py'
-      - '.github/workflows/collect-players.yml'
   workflow_dispatch:
   schedule:
     - cron: '20 4 * * *'
