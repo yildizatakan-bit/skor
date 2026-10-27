@@ -86,6 +86,44 @@ class ProspectiveSignalsTests(unittest.TestCase):
         wrong["away"]["id"] = "999"
         self.assertIsNone(settle(frozen, wrong))
 
+    def test_later_ml_forecast_is_separately_frozen_before_kickoff(self):
+        data, feed = inputs()
+        ledger, _ = process(data, feed, {}, {}, {}, NOW)
+        first_snapshot = copy.deepcopy(ledger["snapshots"][0])
+        forecast = {"future123": {
+            "p": {"home": .51, "draw": .24, "away": .25},
+            "recordedAt": (NOW + timedelta(hours=1)).isoformat(),
+            "kickoff": KICKOFF,
+        }}
+        ledger2, report = process(data, feed, ledger, {}, forecast,
+                                  NOW + timedelta(hours=2))
+        self.assertEqual(ledger2["snapshots"][0], first_snapshot)
+        self.assertEqual(len(ledger2["modelSnapshots"]), 1)
+        self.assertEqual(report["mlFrozen"], 1)
+        self.assertEqual(report["supplementalMLFrozen"], 1)
+        ledger3, _ = process(data, feed, ledger2, {}, forecast,
+                             NOW + timedelta(hours=3))
+        self.assertEqual(ledger3["modelSnapshots"], ledger2["modelSnapshots"])
+        finished = copy.deepcopy(data["events"][0])
+        finished["done"] = True
+        finished["home"]["score"] = 2
+        finished["away"]["score"] = 1
+        _, settled = process({"events": [finished]}, feed, ledger3,
+                             {"future123": finished}, forecast,
+                             NOW + timedelta(days=2))
+        self.assertEqual(settled["pairedComparison"]["sameMatches"], 1)
+        # A new forecast discovered after kickoff must never be frozen.
+        old, _ = process(data, feed, {}, {}, {}, NOW)
+        late, _ = process(data, feed, old, {}, forecast,
+                          NOW + timedelta(days=2))
+        self.assertEqual(late["modelSnapshots"], [])
+        bad = copy.deepcopy(forecast)
+        bad["future123"]["recordedAt"] = (
+            NOW + timedelta(days=2)).isoformat()
+        denied, _ = process(data, feed, old, {}, bad,
+                            NOW + timedelta(hours=2))
+        self.assertEqual(denied["modelSnapshots"], [])
+
     def test_probabilities_must_be_normalized(self):
         self.assertTrue(valid_probabilities(CLASSIC))
         self.assertFalse(valid_probabilities({"home": 1, "draw": 1, "away": 1}))
