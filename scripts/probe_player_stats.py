@@ -60,6 +60,25 @@ def main():
                 first = (game_log.get("entries") or [{}])[0]
                 print("GAMELOG_FIRST " + json.dumps(
                     first, ensure_ascii=False)[:3200], flush=True)
+                total = next((x for x in first.get("statistics", [])
+                              if x.get("type") == "total"), {})
+                ref = total.get("statistics", {}).get("$ref", "")
+                if ref.startswith("http://sports.core.api.espn.com/"):
+                    ref = "https://" + ref[len("http://"):]
+                if ref.startswith("https://sports.core.api.espn.com/"):
+                    season_stats = get_json(ref)
+                    print("SEASON_STATS " + json.dumps({
+                        "keys": list(season_stats),
+                        "categories": [
+                            {"name": cat.get("name"),
+                             "stats": {stat.get("name"): stat.get("value")
+                                       for stat in cat.get("stats", [])
+                                       if stat.get("name") in
+                                       ("totalGoals","goals","assists","goalAssists",
+                                        "appearances","gameWinningAssists")}}
+                            for cat in season_stats.get("splits", {}).get("categories", [])
+                            if isinstance(cat, dict)]
+                    }, ensure_ascii=False)[:1700], flush=True)
                 print("GAMELOG_SHAPE " + json.dumps({
                     "keys": list(game_log),
                     "sample": shape(game_log, depth=1)
