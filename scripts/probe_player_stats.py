@@ -49,6 +49,34 @@ def main():
                         "names": cat.get("names", [])[:18],
                         "labels": cat.get("labels", [])[:18],
                     }, ensure_ascii=False)[:3500], flush=True)
+            for cat in categories:
+                if isinstance(cat, dict) and cat.get("name") == "offensive":
+                    print("OFFENSIVE_KEYS " + json.dumps(
+                        [x.get("name") for x in cat.get("stats", []) if isinstance(x, dict)],
+                        ensure_ascii=False), flush=True)
+            for label, alternative in [
+                ("SEASON_QUERY", url + "?season=2026"),
+                ("SEASON_PATH", "https://sports.core.api.espn.com/v2/sports/soccer/leagues/"
+                 + urllib.parse.quote(league, safe="")
+                 + "/seasons/2026/athletes/" + urllib.parse.quote(athlete_id, safe="")
+                 + "/statistics")
+            ]:
+                try:
+                    variant = get_json(alternative)
+                    print(label + " " + json.dumps({
+                        "keys": list(variant), "season": variant.get("season"),
+                        "categoryNames": [x.get("name") for x in
+                            variant.get("splits", {}).get("categories", [])
+                            if isinstance(x, dict)],
+                        "firstGeneralStat": next((
+                            x.get("value") for cat in
+                            variant.get("splits", {}).get("categories", [])
+                            if isinstance(cat, dict)
+                            for x in cat.get("stats", [])
+                            if isinstance(x, dict) and x.get("name") == "appearances"), None)
+                    }, ensure_ascii=False)[:1200], flush=True)
+                except (OSError, ValueError, urllib.error.URLError) as exc:
+                    print(label + "_UNAVAILABLE " + str(exc), flush=True)
             print("STATS_META " + json.dumps({
                 "keys": list(result), "season": result.get("season"),
                 "seasonType": result.get("seasonType"),
