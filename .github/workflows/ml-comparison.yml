@@ -1,10 +1,19 @@
-name: Experimental ML comparison (read-only archive)
+name: Experimental ML 1X2 comparison
 on:
+  pull_request:
+    paths:
+      - 'scripts/train_ml.py'
+      - 'ml-comparison.js'
+      - 'index.html'
+      - 'sw.js'
+      - '.github/workflows/ml-comparison.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '35 7 * * *'
 permissions:
   contents: write
 concurrency:
-  group: experimental-ml-comparison
+  group: experimental-ml-comparison-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   train:
@@ -19,9 +28,34 @@ jobs:
           python-version: '3.12'
       - name: Install isolated ML dependencies
         run: python -m pip install 'numpy>=1.26,<3' 'scikit-learn>=1.4,<2'
-      - name: Train using read-only SQLite and freeze upcoming predictions
-        run: python scripts/train_ml.py
-      - name: Commit only separate ML JSON files
+      - name: Verify JS syntax
+        run: node --check ml-comparison.js
+      - name: Verify historical SQLite is never modified by ML
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          python scripts/train_ml.py
+          after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$before" = "$after"
+          python - <<'PY'
+          import json
+          for name in ('ml_predictions.json','ml_prediction_history.json','ml_metrics.json'):
+              with open(name,encoding='utf-8') as f: data=json.load(f)
+              assert isinstance(data,dict), name
+          with open('ml_metrics.json',encoding='utf-8') as f: report=json.load(f)
+          assert report['holdout']['matches'] >= 20, report
+          print('Read-only archive verified; ML holdout:',report['holdout'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ml-comparison-results
+          path: |
+            ml_predictions.json
+            ml_prediction_history.json
+            ml_metrics.json
+      - name: Publish only ML outputs on default branch
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
