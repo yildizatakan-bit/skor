@@ -72,6 +72,11 @@ jobs:
           git add player_signal_history.json player_signal_metrics.json
           if ! git diff --cached --quiet; then
             git commit -m 'Freeze prospective player features for future validation'
-            git pull --rebase
-            git push
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase
+              if git push; then pushed=1; break; fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
           fi
