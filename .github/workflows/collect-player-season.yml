@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/enrich_player_season.py'
+      - 'scripts/build_player_team_features.py'
       - '.github/workflows/collect-player-season.yml'
   workflow_dispatch:
   schedule:
@@ -25,16 +26,17 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify Python syntax
-        run: python -m py_compile scripts/enrich_player_career.py scripts/enrich_player_season.py
+        run: python -m py_compile scripts/enrich_player_career.py scripts/enrich_player_season.py scripts/build_player_team_features.py
       - name: Collect latest ESPN season totals into separate player database
         env:
-          SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '500' || '1500' }}
+          SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '2500' || '2000' }}
           SEASON_STATS_WORKERS: '4'
         shell: bash
         run: |
           set -euo pipefail
           before="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
           python scripts/enrich_player_season.py
+          python scripts/build_player_team_features.py
           after="$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)"
           test "$before" = "$after"
           python - <<'PY'
@@ -43,6 +45,10 @@ jobs:
           assert r['playerLeagueEntries'] > 1000, r
           assert r['successfulSeasonEntries'] > 0, r
           print('Verified season goals:',r['withGoals'],'players')
+          with open('player_team_features.json',encoding='utf-8') as f: teams=json.load(f)
+          assert teams['scope'].startswith('Upcoming'), teams
+          assert isinstance(teams['teams'], dict)
+          print('Upcoming team coverage:',teams['coverage'])
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -50,13 +56,14 @@ jobs:
           path: |
             player_data.sqlite3
             player_season_coverage.json
+            player_team_features.json
       - name: Persist only player data on same branch
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f player_data.sqlite3
-          git add player_season_coverage.json
+          git add player_season_coverage.json player_team_features.json
           if ! git diff --cached --quiet; then
             git commit -m 'Update verified player season stats separately'
             git pull --rebase
