@@ -32,7 +32,7 @@ jobs:
         run: python scripts/test_player_features.py
       - name: Collect latest ESPN season totals into separate player database
         env:
-          SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '2500' || '2000' }}
+          SEASON_STATS_BATCH: ${{ github.event_name == 'pull_request' && '500' || '2000' }}
           SEASON_STATS_WORKERS: '4'
         shell: bash
         run: |
