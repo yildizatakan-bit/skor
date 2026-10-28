@@ -10,3 +10,10 @@
 .market-filter select{width:100%;min-width:0;padding:11px 12px;font-size:14px}
 .market-card-label{display:block!important;color:#70c9ff!important;font-weight:700;margin-top:5px}
 .market-card-prob{background:#064a37;color:#70f4b5;padding:9px 10px;border-radius:10px;font-size:16px;white-space:nowrap}
+
+.model-switch{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #42617d;border-radius:12px;background:#0d2237}
+.model-switch button{min-height:44px;padding:10px 14px;border:1px solid #47617b;border-radius:10px;background:#172f49;color:#f2f7ff;font-size:14px;font-weight:750;line-height:1.2}
+.model-switch button:hover{background:#214260}
+.model-switch button[aria-pressed="true"]{background:#087cf4;border-color:#63b2ff;color:#fff;box-shadow:0 0 0 2px #087cf455}
+.model-switch button:focus-visible{outline:3px solid #ffd35c;outline-offset:2px}
+.model-switch small{flex-basis:100%;color:#d2e0ef;font-size:12px;line-height:1.5}
