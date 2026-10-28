@@ -1,0 +1,1 @@
+{"model":"multinomial-logistic-v1-experimental","method":"chronological 80/20 holdout","trainingMatches":0,"validationMatches":0,"metrics":null,"predictions":{},"generatedAt":null,"warning":"Experimental 1X2 output; not evidence of better betting performance."}
