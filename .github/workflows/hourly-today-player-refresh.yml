@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: hourly-today-player-refresh
+  group: scheduled-isolated-player-research
   cancel-in-progress: false
 jobs:
   refresh:
