@@ -46,7 +46,7 @@ jobs:
           git add -f player_data.sqlite3
           git add player_features.json player_coverage.json player_team_features.json
           if ! git diff --cached --quiet; then
-            git commit -m 'Refresh squads and player data for today's matches'
+            git commit -m "Refresh squads and player data for today’s matches"
             pushed=0
             for attempt in 1 2 3 4 5; do
               git pull --rebase origin feature/ml-comparison-20261027
