@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 # branch so its database and helper modules stay on that branch.
 sys.path.insert(0, str(Path.cwd() / "scripts"))
 
-from update_players import DB_PATH, ROOT, export, get_json, init, now, update_one
+from update_players import DB_PATH, ROOT, export, init, now, update_one
 import enrich_player_season
 import build_player_team_features
 
@@ -88,6 +88,10 @@ def main():
     targets = today_fixture_teams(data, instant)
     print(f"Today's upcoming fixture teams ({instant.astimezone(LOCAL).date()}): {len(targets)}",
           flush=True)
+    if not targets:
+        print("No remaining matches today; keeping the latest player feed unchanged.",
+              flush=True)
+        return
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH, timeout=90)
