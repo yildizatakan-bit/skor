@@ -1,0 +1,60 @@
+name: Hourly player data for today's matches
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: scheduled-isolated-player-research
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout application and protected production inputs
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: app-source
+          fetch-depth: 1
+      - name: Checkout isolated player-data branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/ml-comparison-20261027
+          path: player-data
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refresh today's squads and publish player-only data
+        shell: bash
+        working-directory: player-data
+        run: |
+          set -euo pipefail
+          cp ../app-source/data.json data.json
+          cp ../app-source/match_archive.sqlite3 match_archive.sqlite3
+          source_hashes="$(sha256sum match_archive.sqlite3 prediction_history.json)"
+          python ../app-source/scripts/refresh_today_players.py
+          test "$(sha256sum match_archive.sqlite3 | cut -d' ' -f1)" = "$(sha256sum ../app-source/match_archive.sqlite3 | cut -d' ' -f1)"
+          test "$(sha256sum prediction_history.json)" = "$(printf '%s\n' "$source_hashes" | tail -n 1)"
+          git restore -- data.json match_archive.sqlite3
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f player_data.sqlite3
+          git add player_features.json player_coverage.json player_team_features.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Refresh squads and player data for today's matches'
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin feature/ml-comparison-20261027
+              if git push origin HEAD:feature/ml-comparison-20261027; then
+                pushed=1
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            test "$pushed" = 1
+          fi
