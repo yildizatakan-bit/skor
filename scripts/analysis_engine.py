@@ -2,7 +2,7 @@
 import math
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 MARKETS = ('home','draw','away','homeOrDraw','awayOrDraw','noDraw','over15','under15','over25','under25','over35','under35','btts','noBtts','homeOver05','awayOver05','homeUnder15','awayUnder15','even','odd')
 
@@ -42,7 +42,10 @@ def same_team(side, target):
     return bool(x and y and x==y)
 
 def recent(events, team, kickoff, league=None):
-    rows=[m for m in events if m.get('done') and when(m['date']) < kickoff
+    # Give recently finished matches a three-hour finalization buffer so a
+    # result that was still in progress at kickoff cannot leak into features.
+    cutoff=kickoff-timedelta(hours=3)
+    rows=[m for m in events if m.get('done') and when(m['date']) < cutoff
           and (same_team(m['home'],team) or same_team(m['away'],team))
           and isinstance(m['home'].get('score'),int) and isinstance(m['away'].get('score'),int)]
     return sorted(rows,key=lambda x:x['date'],reverse=True)[:10]
@@ -103,7 +106,10 @@ def calculate(match,events,elo=None,opponent_adjustment=None):
     for k in p:p[k]=p[k]/mass
     p['homeOrDraw']=p['home']+p['draw'];p['awayOrDraw']=p['away']+p['draw'];p['noDraw']=p['home']+p['away']
     p.update(expanded_markets(lh,la))
-    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v4-opponent-adjusted','elo':elo,'opponentAdjustment':adj,'limitations':['No player or lineup data','Elo ratings relative to available history','Heuristic coefficients not backtested']}
+    limitations=['No verified historical odds, starting lineups, injuries, shots or corners',
+                 'Three-hour buffer approximates final-score availability']
+    limitations.append('Elo ratings use only available completed matches' if elo else 'Elo is disabled in the baseline comparison')
+    return {'ready':True,'p':{k:round(v,6) for k,v in p.items()},'lh':round(lh,3),'la':round(la,3),'hf':hf,'af':af,'nh':len(h),'na':len(a),'model':'poisson-v5-elo' if elo else 'poisson-v4-baseline','elo':elo,'opponentAdjustment':adj,'limitations':limitations}
 
 # Additional markets are derived from the SAME full-time score distribution.
 # No extra API calls, no independent models and no multiplication of correlated events.
@@ -170,3 +176,47 @@ def metrics(archive):
     selected=[x for x in done if x.get('primaryMarket') and x['p'][x['primaryMarket']]>=.5]
     wins=sum(x['correct'][x['primaryMarket']] for x in selected)
     return {'evaluatedMatches':len(done),'evaluatedPrimaryPredictions':len(selected),'correctPrimaryPredictions':wins,'primaryHitRate':round(wins/len(selected),4) if selected else None,'method':'One frozen highest-probability market per match, selected before kickoff; not a calibration guarantee'}
+
+def settle_model_comparison(archive,events):
+    """Settle only new, frozen A/B snapshots; never rewrites old score data."""
+    lookup={e['id']:e for e in events}
+    for row in archive:
+        if row.get('settled') or not isinstance(row.get('models'),dict):continue
+        match=lookup.get(row.get('matchId'))
+        if not match or not match.get('done'):continue
+        h=match.get('home',{}).get('score');a=match.get('away',{}).get('score')
+        if isinstance(h,int) and not isinstance(h,bool) and isinstance(a,int) and not isinstance(a,bool):
+            row['settled']=True;row['score']=[h,a]
+
+def model_comparison_metrics(archive,confidence_threshold=.60):
+    """Prospective, same-match comparison for baseline vs Elo probabilities."""
+    done=[r for r in archive if r.get('settled') and isinstance(r.get('score'),list)
+          and len(r['score'])==2 and isinstance(r.get('models'),dict)]
+    outcomes=('home','draw','away')
+    actuals=[]
+    for r in done:
+        h,a=r['score']
+        if not isinstance(h,int) or isinstance(h,bool) or not isinstance(a,int) or isinstance(a,bool):continue
+        actuals.append((r,0 if h>a else 1 if h==a else 2))
+    def summarize(rows,key):
+        valid=[];hits=0;brier=0.0;logloss=0.0;confident=0;confident_hits=0
+        for row,actual in rows:
+            p=row['models'].get(key,{})
+            values=[p.get(name) for name in outcomes]
+            if any(not isinstance(x,(int,float)) or not 0<=x<=1 for x in values):continue
+            valid.append((row,actual,values))
+            pick=max(range(3),key=lambda i:values[i]);hit=pick==actual
+            hits+=int(hit)
+            brier+=sum((values[i]-int(i==actual))**2 for i in range(3))
+            logloss-=math.log(max(values[actual],1e-12))
+            if values[pick]>=confidence_threshold:
+                confident+=1;confident_hits+=int(hit)
+        n=len(valid)
+        return {'correct':hits,'total':n,'hitRate':round(hits/n,4) if n else None,
+                'brier':round(brier/n,5) if n else None,'logLoss':round(logloss/n,5) if n else None,
+                'highConfidence':{'threshold':confidence_threshold,'correct':confident_hits,
+                    'total':confident,'rate':round(confident_hits/confident,4) if confident else None,
+                    'coverage':round(confident/n,4) if n else None}}
+    return {'evaluatedMatches':len(actuals),
+            'models':{name:summarize(actuals,name) for name in ('baseline','elo')},
+            'method':'Prospective frozen predictions on the same fixtures; highest 1-X-2 probability; high-confidence rate includes coverage.'}

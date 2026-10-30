@@ -4,6 +4,7 @@ No player/lineup features are fabricated. Ratings are relative to the available
 historical match pool, not a global ranking of all football clubs.
 """
 import math
+from datetime import timedelta
 from analysis_engine import team_key, when
 
 BASE = 1500.0
@@ -13,7 +14,8 @@ K = 22.0
 def ratings_before(events, kickoff):
     ratings = {}
     counts = {}
-    ordered = sorted((e for e in events if e.get('done') and e.get('date') and when(e['date']) < kickoff
+    cutoff=kickoff-timedelta(hours=3)
+    ordered = sorted((e for e in events if e.get('done') and e.get('date') and when(e['date']) < cutoff
                       and isinstance(e.get('home', {}).get('score'), int)
                       and isinstance(e.get('away', {}).get('score'), int)), key=lambda e: (e['date'], e.get('id', '')))
     seen = set()

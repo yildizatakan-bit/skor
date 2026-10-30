@@ -10,7 +10,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import unicodedata
-from analysis_engine import calculate, settle_archive, metrics, when
+from analysis_engine import (calculate, settle_archive, metrics, when,
+                             settle_model_comparison, model_comparison_metrics)
+from elo_engine import matchup as elo_matchup
 
 LEAGUES = ['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','ned.1','eng.2','uefa.champions','uefa.europa','uefa.europa.conf','fifa.world','uefa.euro','uefa.nations','conmebol.america','concacaf.gold.cup','afc.asian.cup','caf.nations']
 # Extra competitions are used ONLY for historical team form, not displayed as fixtures.
@@ -415,6 +417,13 @@ def main():
     except (OSError, ValueError, TypeError):
         archive = []
     by_id = {x['matchId'] for x in archive if isinstance(x, dict) and x.get('matchId')}
+    comparison_path = ROOT / 'model_comparison_history.json'
+    try:
+        comparison = json.loads(comparison_path.read_text('utf-8')).get('predictions', [])
+        if not isinstance(comparison, list): comparison = []
+    except (OSError, ValueError, TypeError):
+        comparison = []
+    compared_ids = {x.get('matchId') for x in comparison if isinstance(x, dict)}
     # Reuse previous probabilities when neither team's latest results have changed.
     previous_analyses = {}
     if path.exists():
@@ -445,11 +454,11 @@ def main():
             continue
         fp = fingerprint(match)
         cached = previous_analyses.get(match['id'], {})
-        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v2-all-competitions':
+        if cached.get('historyFingerprint') == fp and cached.get('model') == 'poisson-v5-elo':
             result = cached
             cache_hits += 1
         else:
-            result = calculate(match, selected)
+            result = calculate(match, selected, elo=elo_matchup(selected, match))
             result['historyFingerprint'] = fp
         # v25: Never publish a prediction unless both sides have ten verified
         # completed matches strictly before kickoff. Keep collecting history.
@@ -459,7 +468,8 @@ def main():
             result.pop('p', None)
         analyses[match['id']] = result
         diagnostics[match['id']] = {'home': match['home']['name'], 'away': match['away']['name'], 'homeMatches': result.get('nh',0), 'awayMatches': result.get('na',0), 'ready': result['ready']}
-        if result['ready'] and not match.get('live') and match['id'] not in by_id:
+        if (result['ready'] and not match.get('live') and when(match['date']) > now
+                and match['id'] not in by_id):
             # Select one market per match before kickoff for auditable hit rate.
             market = max(result['p'], key=result['p'].get)
             archive.append({'matchId':match['id'],'league':match['league'],
@@ -467,10 +477,25 @@ def main():
                 'p':result['p'],'primaryMarket':market,'model':result['model'],
                 'settled':False})
             by_id.add(match['id'])
+        if (result['ready'] and not match.get('live') and when(match['date']) > now
+                and match['id'] not in compared_ids):
+            baseline = calculate(match, selected)
+            if baseline.get('ready'):
+                comparison.append({'matchId':match['id'],'league':match['league'],
+                    'kickoff':match['date'],'createdAt':now.isoformat(),
+                    'models':{'baseline':{k:baseline['p'][k] for k in ('home','draw','away')},
+                              'elo':{k:result['p'][k] for k in ('home','draw','away')}},
+                    'settled':False})
+                compared_ids.add(match['id'])
     settle_archive(archive, selected)
+    settle_model_comparison(comparison, selected)
     archive = sorted(archive,key=lambda x:x['kickoff'])[-2000:]
+    comparison = sorted(comparison,key=lambda x:x.get('kickoff',''))[-2000:]
     archive_path.write_text(json.dumps({'predictions':archive},ensure_ascii=False,separators=(',',':')),encoding='utf-8')
-    payload = {'analyses':analyses,'validation':metrics(archive),'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
+    comparison_path.write_text(json.dumps({'predictions':comparison},ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+    payload = {'analyses':analyses,'validation':metrics(archive),
+               'modelComparison':model_comparison_metrics(comparison),
+               'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                'events': sorted(selected, key=lambda e: e['date']), 'predictionArchive': [r for r in archive if r.get('league') in LEAGUES and r.get('p')], 'diagnostics': diagnostics,
                'errors': errors, 'historyDays': HISTORY_DAYS, 'fixtureDays': FUTURE_DAYS,
                'source': 'ESPN unofficial public scoreboards; historical results, Elo and Poisson model computed in GitHub Actions'}
