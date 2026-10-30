@@ -288,7 +288,9 @@ def merge_display(original,bsd,link):
     return x
 
 def publish(db,now,errors):
-    from analysis_engine import calculate, settle_archive, metrics, when, recent
+    from analysis_engine import (calculate, settle_archive, metrics, when, recent,
+                                 settle_model_comparison, model_comparison_metrics)
+    from elo_engine import matchup as elo_matchup
     original=original_events(db);bsd=existing_new(db)
     links=dict(db.execute('SELECT provider_id,original_match_id FROM bsd_event_links'))
     compiled={k:json.loads(json.dumps(v)) for k,v in original.items()}
@@ -311,6 +313,11 @@ def publish(db,now,errors):
     except (OSError,ValueError):archive=[]
     if not isinstance(archive,list):archive=[]
     by_id={m.get('matchId') for m in archive if isinstance(m,dict)}
+    comparison_path=ROOT/'model_comparison_history.json'
+    try:comparison=json.loads(comparison_path.read_text('utf-8')).get('predictions',[])
+    except (OSError,ValueError,TypeError):comparison=[]
+    if not isinstance(comparison,list):comparison=[]
+    compared_ids={m.get('matchId') for m in comparison if isinstance(m,dict)}
     analyses={};diagnostics={}
     previous={}
     try:previous=json.loads((ROOT/'data.json').read_text('utf-8')).get('analyses',{})
@@ -322,9 +329,9 @@ def publish(db,now,errors):
                       for s in ('home','away')],sort_keys=True)
         cached=previous.get(m['id'],{})
         # Avoid expensive re-evaluation only when all prior effective results match.
-        if cached.get('bsd45Fingerprint')==fp and 'p' in cached: result=dict(cached)
+        if cached.get('bsd45Fingerprint')==fp and cached.get('model')=='poisson-v5-elo' and 'p' in cached: result=dict(cached)
         else:
-            result=calculate(m,selected)
+            result=calculate(m,selected,elo=elo_matchup(selected,m))
             result['bsd45Fingerprint']=fp
         if result.get('nh',0)<10 or result.get('na',0)<10:
             result=dict(result);result['ready']=False;result.pop('p',None)
@@ -337,15 +344,28 @@ def publish(db,now,errors):
                             'createdAt':now.isoformat(),'p':result['p'],
                             'primaryMarket':primary,'model':result['model'],'settled':False})
             by_id.add(m['id'])
+        if (result['ready'] and not m.get('live') and when(m['date'])>now
+                and m['id'] not in compared_ids):
+            baseline=calculate(m,selected)
+            if baseline.get('ready'):
+                comparison.append({'matchId':m['id'],'league':m['league'],
+                    'kickoff':m['date'],'createdAt':now.isoformat(),
+                    'models':{'baseline':{k:baseline['p'][k] for k in ('home','draw','away')},
+                              'elo':{k:result['p'][k] for k in ('home','draw','away')}},
+                    'settled':False})
+                compared_ids.add(m['id'])
     settle_archive(archive,selected)
+    settle_model_comparison(comparison,selected)
     archive=sorted(archive,key=lambda a:a.get('kickoff',''))[-2000:]
+    comparison=sorted(comparison,key=lambda a:a.get('kickoff',''))[-2000:]
     data={'analyses':analyses,'validation':metrics(archive),'updatedAt':now.isoformat(),
+          'modelComparison':model_comparison_metrics(comparison),
           'events':sorted(selected,key=lambda x:x['date']),'predictionArchive':
           [r for r in archive if r.get('league') in DISPLAYED and r.get('p')],
           'diagnostics':diagnostics,'errors':errors,'historyDays':730,'fixtureDays':7,
           'source':'ESPN historical archive preserved; BSD new fixtures and scores'}
     # Write temp files and atomically swap only after every calculation succeeds.
-    write_atomic(f,{'predictions':archive});write_atomic(ROOT/'data.json',data)
+    write_atomic(f,{'predictions':archive});write_atomic(comparison_path,{'predictions':comparison});write_atomic(ROOT/'data.json',data)
     return {'events':len(selected),'completed':sum(bool(e.get('done')) for e in selected),
             'ready':sum(bool(x['ready']) for x in analyses.values())}
 
