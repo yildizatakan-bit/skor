@@ -1,6 +1,9 @@
 name: Update football archive
 on:
   workflow_dispatch:
+  # Keep the seven-day fixture window fresh four times daily (UTC).
+  schedule:
+    - cron: '17 */6 * * *'
 permissions:
   contents: write
 concurrency:
@@ -23,6 +26,39 @@ jobs:
           SEED_DAYS: '90'
           TEAM_BATCH: '12'
         run: python scripts/update_data.py
+      - name: Verify fresh upcoming fixtures before publishing
+        shell: bash
+        run: |
+          python - <<'PY'
+          import collections, datetime as dt, json, os, pathlib
+          payload = json.loads(pathlib.Path('data.json').read_text(encoding='utf-8'))
+          now = dt.datetime.now(dt.timezone.utc)
+          updated = dt.datetime.fromisoformat(payload['updatedAt'].replace('Z', '+00:00'))
+          age_minutes = (now - updated).total_seconds() / 60
+          if age_minutes > 30:
+              raise SystemExit(f'Stale fixture snapshot: updated {age_minutes:.0f} minutes ago')
+          end = now + dt.timedelta(days=int(payload.get('fixtureDays', 7)))
+          fixtures = []
+          for event in payload.get('events', []):
+              if event.get('done'):
+                  continue
+              try:
+                  kickoff = dt.datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
+              except (KeyError, TypeError, ValueError):
+                  continue
+              if now - dt.timedelta(hours=4) <= kickoff <= end:
+                  fixtures.append(event)
+          if not fixtures:
+              raise SystemExit('No upcoming fixtures found in the seven-day window; refusing to publish an empty/stale fixture snapshot')
+          by_league = collections.Counter(event.get('league', 'unknown') for event in fixtures)
+          print(f'Validated {len(fixtures)} upcoming/live fixtures across {len(by_league)} competitions')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('### Fixture refresh coverage\n\n')
+              summary.write(f'Updated: {updated.isoformat()} · Fixtures in the next seven days: **{len(fixtures)}**\n\n')
+              summary.write('| Competition | Fixtures |\n|---|---:|\n')
+              for league, count in sorted(by_league.items()):
+                  summary.write(f'| {league} | {count} |\n')
+          PY
       - name: Commit durable database and published snapshot
         run: |
           git config user.name 'github-actions[bot]'
