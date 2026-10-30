@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import collections, datetime as dt, json, pathlib, sys
+          import collections, datetime as dt, json, os, pathlib
           payload = json.loads(pathlib.Path('data.json').read_text(encoding='utf-8'))
           now = dt.datetime.now(dt.timezone.utc)
           updated = dt.datetime.fromisoformat(payload['updatedAt'].replace('Z', '+00:00'))
@@ -52,9 +52,7 @@ jobs:
               raise SystemExit('No upcoming fixtures found in the seven-day window; refusing to publish an empty/stale fixture snapshot')
           by_league = collections.Counter(event.get('league', 'unknown') for event in fixtures)
           print(f'Validated {len(fixtures)} upcoming/live fixtures across {len(by_league)} competitions')
-          with open('/dev/stdout', 'w') as summary:
-              pass
-          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
               summary.write('### Fixture refresh coverage\n\n')
               summary.write(f'Updated: {updated.isoformat()} · Fixtures in the next seven days: **{len(fixtures)}**\n\n')
               summary.write('| Competition | Fixtures |\n|---|---:|\n')
