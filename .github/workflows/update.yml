@@ -59,12 +59,15 @@ jobs:
               for league, count in sorted(by_league.items()):
                   summary.write(f'| {league} | {count} |\n')
           PY
+      - name: Record prospective schedule and workload context
+        run: python scripts/track_match_context.py
       - name: Commit durable database and published snapshot
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f match_archive.sqlite3
           git add data.json prediction_history.json model_comparison_history.json
+          git add match_context_history.json
           if ! git diff --cached --quiet; then
             git commit -m 'Update persistent football archive and snapshots'
             git pull --rebase
