@@ -29,6 +29,7 @@
   function teamKey(s){const k=normalizeName(s);return alias[k]||k;}
   function leagueCode(raw){
     const n=normalizeName(raw);
+    if(n.includes('uefa nations league') || n==='nations league' || n==='uluslar ligi')return 'uefa.nations';
     if(n.includes('conference league'))return 'uefa.europa.conf';
     if(n.includes('europa league'))return 'uefa.europa';
     if(n.includes('champions league'))return 'uefa.champions';
@@ -103,14 +104,17 @@
     if(document.hidden||busy||!Array.isArray(state.fixtures))return;
     const now=Date.now();if(!force&&now-lastStart<55000)return;
     lastStart=now;busy=true;
+    const espnRequest = pollEspn();
     try{
-      const rows=await download();const result=apply(rows);
+      const rows=await download();
+      await espnRequest;
+      const result=apply(rows);
       lastSnapshot={events:rows,time:Date.now()};lastReceived=lastSnapshot.time;
       if(result.changed)render();
-      if(!rows.some(row=>row?.live===true && locate(row)?.live)) await pollEspn();
+
     }catch(error){
       console.warn('[BSD] canlı skor sorgusu:',error?.message||error);
-      await pollEspn();
+      await espnRequest;
     }
     finally{busy=false;removeOldLine();}
   }
