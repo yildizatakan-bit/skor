@@ -107,17 +107,22 @@
       const rows=await download();const result=apply(rows);
       lastSnapshot={events:rows,time:Date.now()};lastReceived=lastSnapshot.time;
       if(result.changed)render();
-    }catch(error){console.warn('[BSD] canlı skor sorgusu:',error?.message||error);}
+      if(!rows.some(row=>row?.live===true && locate(row)?.live)) await pollEspn();
+    }catch(error){
+      console.warn('[BSD] canlı skor sorgusu:',error?.message||error);
+      await pollEspn();
+    }
     finally{busy=false;removeOldLine();}
   }
+  const pollEspn = pollLive;
   const originalLoad=load;
   load=async function(...args){
     const result=await originalLoad(...args);
     // data.json may be older than the latest BSD overlay.
-    if(lastSnapshot&&Date.now()-lastSnapshot.time<8*60000){const x=apply(lastSnapshot.events);if(x.changed)render();}
+    if(lastSnapshot&&Date.now()-lastSnapshot.time<POLL_EVERY_MS){const x=apply(lastSnapshot.events);if(x.changed)render();}
     return result;
   };
-  pollLive=()=>run(false); // Override the legacy ESPN polling function without editing app.js.
+  pollLive=()=>run(false); // Keep ESPN available as a fallback.
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>run(true),{once:true});
   else run(true);
   setInterval(()=>{if(!document.hidden)run(false);},POLL_EVERY_MS);
