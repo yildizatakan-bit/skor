@@ -14,7 +14,7 @@ const markets=[['Maç Sonucu',[['1','home'],['X','draw'],['2','away']]],['Çifte
 // v30: new options are computed server-side from the same Elo-adjusted score matrix.
 // Historical frozen predictions without these keys remain unchanged.
 function percent(x){return Math.round(100*x)}function leagueName(code){return LEAGUES.find(x=>x[0]===code)?.[1]||code}function logo(t){return t.logo?`<img class="logo" src="${esc(t.logo)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`:'<span class="logo">⚽</span>'}
-function filtered(){return state.fixtures.filter(m=>(!m.done||retainFinished(m))&&(state.league==='all'||m.league===state.league))}function fixture(m){let data=state.history||[],an=model(m,data);return {...m,analysis:an}}function available(){return filtered().map(fixture).filter(m=>m.analysis?.ready&&m.analysis.nh>=10&&m.analysis.na>=10)}function best(m){let a=m.analysis;if(!a.ready)return null;let pairs=markets.flatMap(([group,rows])=>rows.map(([name,k])=>({group,name,k,p:a.p[k]}))).filter(x=>Number.isFinite(x.p)&&x.p>=.5);return pairs.sort((a,b)=>b.p-a.p)[0]||null}
+function filtered(){return state.fixtures.filter(m=>(!m.done||retainFinished(m))&&(state.league==='all'||m.league===state.league))}function fixture(m){let data=state.history||[],an=model(m,data);return {...m,analysis:an}}function available(){return filtered().map(fixture).filter(m=>m.live||retainFinished(m)||(m.analysis?.ready&&m.analysis.nh>=10&&m.analysis.na>=10))}function best(m){let a=m.analysis;if(!a.ready)return null;let pairs=markets.flatMap(([group,rows])=>rows.map(([name,k])=>({group,name,k,p:a.p[k]}))).filter(x=>Number.isFinite(x.p)&&x.p>=.5);return pairs.sort((a,b)=>b.p-a.p)[0]||null}
 function triple(a){return `<div class="triple"><div class="pill win">1<strong>%${percent(a.p.home)}</strong></div><div class="pill draw">X<strong>%${percent(a.p.draw)}</strong></div><div class="pill loss">2<strong>%${percent(a.p.away)}</strong></div></div>`}
 function hero(m,index,total){let b=best(m),ready=m.analysis.ready;return `<div class="hero" style="background-image:linear-gradient(180deg,rgba(4,17,38,.74) 0%,rgba(5,19,39,.52) 40%,rgba(4,17,34,.84) 100%),url('./stadium-featured.webp');background-size:cover;background-position:center;background-repeat:no-repeat;" id="featured-slide" data-open="${esc(m.id)}" role="button" tabindex="0" aria-label="Öne çıkan maç ${index+1} / ${total}"><div class="top"><span class="tag">★ ${b?'Günün maçı':'Günün karşılaşması'}</span><span class="flag">${esc(leagueName(m.league))}</span></div><div class="versus"><div>${logo(m.home)}<b>${esc(m.home.name)}</b></div><strong>${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?m.home.score+' - '+m.away.score:'VS'}</strong><div>${logo(m.away)}<b>${esc(m.away.name)}</b></div></div><div class="muted" style="text-align:center;margin-bottom:10px">${m.live?`<span style="color:#ff666e;font-weight:800">🔴 CANLI ${esc(m.clock||'')}</span> · ${fmt(m.date)}`:fmt(m.date)}</div><div style="font-size:clamp(22px,4.5vw,30px);font-weight:850;text-align:center;color:#f5f9ff;margin:18px 0 14px;letter-spacing:-.4px">Maç Sonucu Tahmini <span style="white-space:nowrap;color:#b7d8ff">(1-X-2)</span></div>${ready?triple(m.analysis):'<div class="muted" style="text-align:center">Bu maç için yeterli geçmiş veri yok.</div>'}${b?`<div style="margin-top:18px;padding:13px 16px;border:1px solid #315572;border-radius:14px;background:rgba(15,36,59,.65);font-size:16px;line-height:1.55;text-align:center"><span style="color:#b6cbe0">Diğer güçlü tahmin</span><div style="font-weight:750;color:#fff">${esc(b.group)} · ${esc(b.name)} — <span style="color:#ffc847">%${percent(b.p)}</span></div></div>`:''}<div class="dots slider-dots" aria-label="${index+1}. maç, toplam ${total} maç">${Array.from({length:total},(_,i)=>`<span class="slider-dot ${i===index?'active':''}" aria-hidden="true"></span>`).join('')}</div></div>`}
 function istanbulDay(date){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(date))}
@@ -162,6 +162,7 @@ async function load(force=false){
     state.analyses=j.analyses||{};state.validation=j.validation||null;state.modelComparison=j.modelComparison||null;state.archive=Array.isArray(j.predictionArchive)?j.predictionArchive:[];
     const now=Date.now();
     state.fixtures=valid.filter(m=>retainFinished(m,now)||(!m.done&&(m.live||(new Date(m.date).getTime()>=now-4*3600e3&&new Date(m.date).getTime()<=now+7*864e5)))).sort((a,b)=>Number(!!b.live)-Number(!!a.live)||new Date(a.date)-new Date(b.date));
+    restoreLiveFixtures(now);
     state.updated=Date.parse(j.updatedAt)||Date.now();
     state.failures=j.errors||[];
     save('updated',state.updated);save('events',valid);save('analyses',state.analyses);
@@ -192,6 +193,20 @@ if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch
 // Keep historical analysis in the GitHub snapshot; poll only today's scoreboard for live scores.
 // ESPN's unofficial endpoint may disallow browser CORS; in that case the published snapshot remains.
 let livePolling=false;
+const recentLiveFixtures = new Map();
+
+function restoreLiveFixtures(now) {
+  const fixtures = new Map(state.fixtures.map(match => [match.id, match]));
+  for (const [id, {match, observedAt}] of recentLiveFixtures) {
+    if (now - observedAt > 5 * 60 * 1000) {
+      recentLiveFixtures.delete(id);
+      continue;
+    }
+    if (state.history.some(row => row.id === id && row.done && !match.done)) continue;
+    if (match.live || retainFinished(match, now)) fixtures.set(id, match);
+  }
+  state.fixtures = [...fixtures.values()].sort((a,b)=>Number(!!b.live)-Number(!!a.live)||Date.parse(a.date)-Date.parse(b.date));
+}
 async function pollLive(){
   if(document.hidden||livePolling)return;
   livePolling=true;
@@ -207,11 +222,12 @@ async function pollLive(){
         const payload=await response.json();
         return (payload.events||[]).map(e=>{
           const comp=e.competitions?.[0],home=comp?.competitors?.find(x=>x.homeAway==='home'),away=comp?.competitors?.find(x=>x.homeAway==='away');
-          const type=e.status?.type||{},live=type.state==='in'&&!type.completed;
+          const status=e.status||comp?.status||{};
+          const type=status.type||{},live=type.state==='in'&&!type.completed;
           const done=type.completed===true;
           if(!home||!away)return null;
           const score=x=>x?.score!==undefined&&x.score!==null&&String(x.score).trim()!==''&&Number.isFinite(Number(x.score))?Number(x.score):null;
-          return {id:league+':'+e.id,live,done,clock:String(e.status?.displayClock||''),hs:score(home),as:score(away),event:parseEvent(e,league)};
+          return {id:league+':'+e.id,live,done,clock:String(status.displayClock||''),hs:score(home),as:score(away),event:parseEvent(e,league)};
         }).filter(Boolean);
       }finally{clearTimeout(timer)}
     }));
@@ -227,11 +243,16 @@ async function pollLive(){
     }
     for(const m of state.fixtures){
       const v=map.get(m.id);if(!v)continue;
-      const newLive=v.live,clock=v.clock,hs=(v.live||v.done)?v.hs:null,as=(v.live||v.done)?v.as:null;
+      if (m.done && !v.done) continue;
+      const newLive=v.live,clock=v.clock;
+      const hs=(v.live||v.done)?v.hs??m.home.score:null;
+      const as=(v.live||v.done)?v.as??m.away.score:null;
       if(m.live!==newLive||m.clock!==clock||m.home.score!==hs||m.away.score!==as){
         m.live=newLive;m.clock=clock;m.home.score=hs;m.away.score=as;changed=true;
       }
-      if(v.done){if(!m.done)recordFinished(m);m.done=true;m.live=false;changed=true}
+      if(v.done&&!m.done){recordFinished(m);m.done=true;m.live=false;changed=true}
+      if(m.live||retainFinished(m))recentLiveFixtures.set(m.id,{match:m,observedAt:Date.now()});
+      else recentLiveFixtures.delete(m.id);
     }
     if(changed){state.fixtures=state.fixtures.filter(m=>!m.done||retainFinished(m)).sort((a,b)=>Number(!!b.live)-Number(!!a.live)||new Date(a.date)-new Date(b.date));render();}
   }catch(e){/* Preserve the last published snapshot when the live source is unavailable. */}
