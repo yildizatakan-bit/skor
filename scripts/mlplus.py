@@ -1,0 +1,150 @@
+"""Train MLPlus and publish a separate prospective prediction ledger."""
+import json
+import math
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.request import urlopen
+from zoneinfo import ZoneInfo
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+LABELS = ("home", "draw", "away")
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+def stamp(value):
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return math.inf
+
+
+def features(p, home, away):
+    if any(not isinstance(p.get(k), (float, int)) for k in LABELS):
+        return None
+    if any(not isinstance(x.get("knownSeasonGoals"), (int, float))
+           or x.get("goalCoverage", 0) < .7 for x in (home, away)):
+        return None
+    h, a = (x["knownSeasonGoals"] for x in (home, away))
+    return [p[k] for k in LABELS] + [(h-a)/(1+h+a), home["goalCoverage"]-away["goalCoverage"]]
+
+
+def starting_ids(match):
+    event = str(match["id"]).rsplit(":", 1)[-1]
+    if not event.isdecimal():
+        return {}
+    url = f'https://site.api.espn.com/apis/site/v2/sports/soccer/{match["league"]}/summary?event={event}'
+    try:
+        with urlopen(url, timeout=6) as response:
+            payload = json.load(response)
+        status = payload["header"]["competitions"][0]["status"]["type"]["state"]
+        if status != "pre":
+            return {}
+        return {str(row["team"]["id"]): {str(p["athlete"]["id"]) for p in row["roster"]
+                                          if p.get("starter") is True}
+                for row in payload.get("rosters", [])}
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        print(f"Lineup unavailable for {event}: {exc}")
+        return {}
+
+
+def squad(team, minutes, starters, kickoff):
+    players = [p for p in team.get("players", []) if stamp(p.get("rosterAsOf")) < kickoff]
+    XI = [p for p in players if str(p["id"]) in starters] if len(starters) == 11 else []
+    confirmed = len(XI) == 11
+    ranked = [p for p in players if minutes.get(str(p["id"]), 0) > 0]
+    if not confirmed:
+        XI = sorted(ranked, key=lambda p: (-minutes[str(p["id"])], str(p["id"])))[:11]
+    selected = XI if len(XI) == 11 else players
+    known = [p for p in selected if isinstance(p.get("goals"), (int, float))
+             and stamp(p.get("seasonStatsAsOf")) < kickoff]
+    # Use mean goals per observed player scaled to roster size to retain
+    # the units of the historical roster feature used during training.
+    return {"goalCoverage": len(known)/max(1, len(selected)),
+            "knownSeasonGoals": sum(p["goals"] for p in known)*len(players)/max(1,len(known)),
+            "selection": "confirmed" if confirmed else "minutes" if len(XI)==11 else "roster"}
+
+
+def main():
+    data, ml = read("data.json"), read("ml_predictions.json")
+    ledger = read("player-source/player_signal_history.json")
+    feed = read("player-source/player_team_features.json")
+    outcomes = {x["matchId"]: x["outcome"] for x in ledger["settlements"]}
+    models = {x["matchId"]: x for x in ledger.get("modelSnapshots",[]) if x["model"] == "ml"}
+    rows = {}
+    for row in ledger["snapshots"]:
+        key = row["matchId"]
+        cutoff = stamp(row["kickoff"])
+        if not stamp(row["playerFeedGeneratedAt"]) <= stamp(row["frozenAt"]) < cutoff:
+            continue
+        p = row.get("probabilities", {}).get("ml") or {}
+        saved = models.get(key, {})
+        if not p and stamp(saved.get("sourceRecordedAt")) <= stamp(saved.get("frozenAt")) < cutoff:
+            p = saved["p"]
+        x = features(p, row["home"], row["away"])
+        if x and outcomes.get(key) in LABELS:
+            rows.setdefault(key, (x, outcomes[key]))
+    if len(rows) < 60 or len({y for _,y in rows.values()}) != 3:
+        raise RuntimeError(f"Insufficient MLPlus training rows: {len(rows)}")
+    x, y = zip(*rows.values())
+    model = make_pipeline(StandardScaler(), LogisticRegression(C=.12, max_iter=1200))
+    model.fit(x,y)
+    path = Path("mlplus_predictions.json")
+    previous = read(path) if path.exists() else {}
+    predictions = previous.get("predictions", {})
+    now = datetime.now(timezone.utc)
+    local = ZoneInfo("Europe/Istanbul")
+    with sqlite3.connect("file:player-source/player_data.sqlite3?mode=ro", uri=True) as db:
+        minutes = {}
+        for league, team, player, played, observed in db.execute(
+                "SELECT league,team_id,player_id,minutes,fetched_at FROM players WHERE minutes > 0"):
+            if stamp(observed) <= now.timestamp():
+                minutes.setdefault(f"{league}:{team}", {})[str(player)] = played
+    for m in data["events"]:
+        cutoff = stamp(m["date"])
+        if not now.timestamp() < cutoff <= now.timestamp()+7*86400 or m.get("done") or m.get("live"):
+            continue
+        if not stamp(feed.get("generatedAt")) <= now.timestamp() or not stamp(ml.get("generatedAt")) <= now.timestamp():
+            continue
+        today = datetime.fromtimestamp(cutoff,local).date() == now.astimezone(local).date()
+        lineup = starting_ids(m) if today else {}
+        sides = []
+        for side in ("home","away"):
+            ident = str(m[side]["id"])
+            team_key = f'{m["league"]}:{ident}'
+            sides.append(squad(feed["teams"].get(team_key,{}), minutes.get(team_key,{}),
+                               lineup.get(ident,set()), cutoff))
+        p = ml["predictions"].get(m["id"],{})
+        vector = features(p.get("p",p),*sides)
+        captured = datetime.now(timezone.utc)
+        if vector is None or captured.timestamp() >= cutoff:
+            continue
+        old = predictions.get(m["id"],{})
+        selection = [s["selection"] for s in sides]
+        if old.get("kickoff") == m["date"] and old.get("selection", []).count("confirmed") > selection.count("confirmed"):
+            continue
+        probabilities = dict(zip(model.classes_, map(float,model.predict_proba([vector])[0])))
+        predictions[m["id"]] = {"p": probabilities, "kickoff":m["date"],
+                                "recordedAt":captured.isoformat(), "selection":selection}
+    history = {r["id"]:r for r in previous.get("history",[])}
+    for m in data["events"]:
+        p = predictions.get(m["id"])
+        if not p or not m.get("done") or p["kickoff"] != m["date"]:
+            continue
+        score = [m[s].get("score") for s in ("home","away")]
+        if all(type(v) is int for v in score):
+            history.setdefault(m["id"], {"id":m["id"],"p":p["p"],"settled":True,"score":score})
+            del predictions[m["id"]]
+    path.write_text(json.dumps({"trainingMatches":len(rows),"generatedAt":now.isoformat(),
+                               "predictions":predictions,"history":list(history.values())},
+                              allow_nan=False,separators=(",",":"))+"\n")
+
+
+if __name__ == "__main__":
+    main()
