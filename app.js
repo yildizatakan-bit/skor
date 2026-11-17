@@ -235,6 +235,39 @@ async function pollLive(){
       }finally{clearTimeout(timer)}
     }));
     const map=new Map(updates.filter(x=>x.status==='fulfilled').flatMap(x=>x.value).map(x=>[x.id,x]));
+    // Recover matches omitted by the league scoreboard using their ESPN event ID.
+    const now = Date.now();
+    const missing = state.fixtures.filter(match => {
+      const kickoff = Date.parse(match.date);
+      const update = map.get(match.id);
+      return !match.done && kickoff <= now && now - kickoff < 4 * 3600000 &&
+        (!update || !(update.live || update.done) || update.hs === null || update.as === null) &&
+        /^\d+$/.test(match.id.split(':').at(-1));
+    });
+    await Promise.allSettled(missing.map(async match => {
+      const eventId = match.id.split(':').at(-1);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6500);
+      try {
+        const url = BASE + encodeURIComponent(match.league) + '/summary?event=' + eventId;
+        const response = await fetch(url, {cache:'no-store', signal:controller.signal});
+        if (!response.ok) return;
+        const payload = await response.json();
+        const competition = payload.header?.competitions?.[0];
+        const status = competition?.status;
+        const done = status?.type?.completed === true;
+        const live = status?.type?.state === 'in' && !done;
+        if (!live && !done) return;
+        function score(side) {
+          const raw = competition.competitors?.find(team => team.homeAway === side)?.score;
+          return /^\d+$/.test(String(raw)) ? Number(raw) : null;
+        }
+        map.set(match.id, {id:match.id, done, live, clock:String(status.displayClock || ''),
+          hs:score('home'), as:score('away')});
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
     let changed=false;
     for(const v of map.values()){
       if(!v.live||!v.event||state.fixtures.some(m=>m.id===v.id))continue;
