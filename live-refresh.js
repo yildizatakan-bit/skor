@@ -59,6 +59,13 @@
       Math.abs(Date.parse(m.date)-kickoff)<3*3600000);
     return unique.length===1?unique[0]:null;
   }
+  function clockMinute(clock) {
+    const value = String(clock || '').trim();
+    if (/^(HT|HALFTIME|HALF TIME|DEVRE ARASI)$/i.test(value)) return 45;
+    const match = value.match(/^(\d{1,3})(?::\d{2})?(?:\s*\+\s*(\d{1,2}))?\s*['’′]?$/);
+    return match ? Number(match[1]) + Number(match[2] || 0) : null;
+  }
+
   function apply(rows){
     let changed=0,matched=0;
     const changedModels=[];
@@ -68,6 +75,10 @@
       matched++;
       // Never regress completed score to an earlier in-play snapshot.
       if(m.done&&!e.done)continue;
+      const shownMinute = clockMinute(m.clock);
+      const incomingMinute = clockMinute(e.clock);
+      if (m.live && e.live && !e.done && shownMinute !== null &&
+          (incomingMinute === null || incomingMinute < shownMinute)) continue;
       const hs=Number(e.home?.score),as=Number(e.away?.score);
       if(e.home?.score==null||e.away?.score==null||!Number.isInteger(hs)||!Number.isInteger(as))continue;
       const newDone=e.done===true;
