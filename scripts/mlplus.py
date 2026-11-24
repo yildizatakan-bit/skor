@@ -113,6 +113,44 @@ def squad(team, minutes, starters, kickoff):
             "selection": "confirmed" if confirmed else "minutes" if len(XI)==11 else "roster"}
 
 
+def scorer_predictions(sides):
+    """Season-rate Poisson estimates conditional on selected lineup/minutes.
+
+    This is a separate scoring estimator, not the MLPlus 1X2 classifier.
+    Unknown participation is never presented as a zero scoring chance.
+    """
+    result = {}
+    for side_name, side in zip(("home", "away"), sides):
+        rows = []
+        for player in side.get("players", []):
+            goals, apps, minutes = (player.get(k) for k in ("goals", "appearances", "minutes"))
+            valid = lambda v: type(v) in (int, float) and math.isfinite(v) and v >= 0
+            selected = player.get("selected", True)
+            unavailable = any(word in str(player.get("availability", "")).lower()
+                              for word in ("injur", "suspend", "out"))
+            rate = goals/apps if valid(goals) and valid(apps) and apps > 0 else None
+            expected = min(90., minutes/apps) if valid(minutes) and valid(apps) and apps > 0 and minutes > 0 else None
+            per90 = 90*goals/minutes if valid(goals) and valid(minutes) and minutes > 0 else None
+            # Prefer observed season minutes, otherwise use goals/appearance.
+            lam = per90*expected/90 if per90 is not None and expected is not None else rate
+            probability = -math.expm1(-lam) if selected and not unavailable and lam is not None else None
+            rows.append({"id": player["id"], "name": player.get("name", player["id"]),
+                         "seasonYear": player.get("seasonYear"),
+                         "seasonFallback": player.get("seasonFallback", False),
+                         "goals": goals if valid(goals) else None,
+                         "appearances": apps if valid(apps) else None,
+                         "minutes": minutes if valid(minutes) else None,
+                         "goalsPer90": per90, "goalsPerAppearance": rate,
+                         "expectedMinutes": expected, "probability": probability,
+                         "selected": selected, "availability": player.get("availability", "unknown"),
+                         "statsAsOf": player.get("seasonStatsAsOf"),
+                         "selection": side.get("selection", "roster")})
+        result[side_name] = sorted(rows, key=lambda row: (
+            row["probability"] is None, -(row["probability"] or 0), str(row["name"])))
+    return {"method": "season_rate_poisson_v1", "conditionalOnSelection": True,
+            "teams": result}
+
+
 def main():
     global EXTRA_FIELDS
     data, ml = read("data.json"), read("ml_predictions.json")
@@ -190,7 +228,8 @@ def main():
             continue
         probabilities = dict(zip(model.classes_, map(float,model.predict_proba([vector])[0])))
         predictions[m["id"]] = {"p": probabilities, "kickoff":m["date"],
-                                "recordedAt":captured.isoformat(), "selection":selection}
+                                "recordedAt":captured.isoformat(), "selection":selection,
+                                "scorers":scorer_predictions(sides)}
     player_history_path.write_text(json.dumps(player_history, allow_nan=False, separators=(",", ":")))
     history = {r["id"]:r for r in previous.get("history",[])}
     for m in data["events"]:
