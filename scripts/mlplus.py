@@ -12,6 +12,26 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 LABELS = ("home", "draw", "away")
+PLAYER_FIELDS = ("goals", "assists", "appearances", "minutes", "shots",
+                 "shotsOnTarget", "interceptions", "tackles", "saves",
+                 "yellowCards", "redCards", "age")
+
+
+def player_vector(side):
+    players = [p for p in side.get("players", []) if p.get("selected", True)]
+    values = []
+    for field in PLAYER_FIELDS:
+        known = [p[field] for p in players if type(p.get(field)) in (int, float)
+                 and math.isfinite(p[field])]
+        values.extend([sum(known)/len(known) if known else 0,
+                       len(known)/max(1, len(players))])
+    for status in ("injur", "suspend", "out", "doubtful", "questionable"):
+        values.append(sum(status in str(p.get("availability", "")).lower()
+                          for p in players))
+    values.append(sum(p.get("availability", "unknown") != "unknown"
+                      for p in players)/max(1, len(players)))
+    return values
+
 
 
 def read(path):
@@ -32,7 +52,7 @@ def features(p, home, away):
            or x.get("goalCoverage", 0) < .7 for x in (home, away)):
         return None
     h, a = (x["knownSeasonGoals"] for x in (home, away))
-    return [p[k] for k in LABELS] + [(h-a)/(1+h+a), home["goalCoverage"]-away["goalCoverage"]]
+    return [p[k] for k in LABELS] + [(h-a)/(1+h+a), home["goalCoverage"]-away["goalCoverage"]] + player_vector(home) + player_vector(away)
 
 
 def starting_ids(match):
@@ -66,7 +86,17 @@ def squad(team, minutes, starters, kickoff):
              and stamp(p.get("seasonStatsAsOf")) < kickoff]
     # Use mean goals per observed player scaled to roster size to retain
     # the units of the historical roster feature used during training.
-    return {"goalCoverage": len(known)/max(1, len(selected)),
+    captured_players = []
+    for player in players:
+        entry = dict(player)
+        entry["selected"] = player in selected
+        entry["minutes"] = minutes.get(str(player["id"]))
+        if stamp(player.get("seasonStatsAsOf")) >= kickoff:
+            for field in PLAYER_FIELDS:
+                if field not in ("age", "minutes"):
+                    entry[field] = None
+        captured_players.append(entry)
+    return {"players": captured_players, "goalCoverage": len(known)/max(1, len(selected)),
             "knownSeasonGoals": sum(p["goals"] for p in known)*len(players)/max(1,len(known)),
             "selection": "confirmed" if confirmed else "minutes" if len(XI)==11 else "roster"}
 
@@ -75,6 +105,9 @@ def main():
     data, ml = read("data.json"), read("ml_predictions.json")
     ledger = read("player-source/player_signal_history.json")
     feed = read("player-source/player_team_features.json")
+    player_history_path = Path("mlplus_player_history.json")
+    player_history = read(player_history_path) if player_history_path.exists() else []
+    ledger["snapshots"] = player_history + ledger["snapshots"]
     outcomes = {x["matchId"]: x["outcome"] for x in ledger["settlements"]}
     models = {x["matchId"]: x for x in ledger.get("modelSnapshots",[]) if x["model"] == "ml"}
     rows = {}
@@ -125,6 +158,11 @@ def main():
         captured = datetime.now(timezone.utc)
         if vector is None or captured.timestamp() >= cutoff:
             continue
+        player_history.append({"matchId":m["id"], "kickoff":m["date"],
+                               "frozenAt":captured.isoformat(),
+                               "playerFeedGeneratedAt":feed["generatedAt"],
+                               "probabilities":{"ml":p.get("p",p)},
+                               "home":sides[0], "away":sides[1]})
         old = predictions.get(m["id"],{})
         selection = [s["selection"] for s in sides]
         if old.get("kickoff") == m["date"] and old.get("selection", []).count("confirmed") > selection.count("confirmed"):
@@ -132,6 +170,7 @@ def main():
         probabilities = dict(zip(model.classes_, map(float,model.predict_proba([vector])[0])))
         predictions[m["id"]] = {"p": probabilities, "kickoff":m["date"],
                                 "recordedAt":captured.isoformat(), "selection":selection}
+    player_history_path.write_text(json.dumps(player_history, allow_nan=False, separators=(",", ":")))
     history = {r["id"]:r for r in previous.get("history",[])}
     for m in data["events"]:
         p = predictions.get(m["id"])
@@ -148,3 +187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
