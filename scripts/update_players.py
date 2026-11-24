@@ -253,8 +253,8 @@ def update_one(db, league, team_id, market):
           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(league,team_id,player_id) DO UPDATE SET
             name=excluded.name,position=excluded.position,age=excluded.age,
-            nationality=excluded.nationality,goals=excluded.goals,assists=excluded.assists,
-            appearances=excluded.appearances,minutes=excluded.minutes,
+            nationality=excluded.nationality,goals=COALESCE(excluded.goals,players.goals),assists=COALESCE(excluded.assists,players.assists),
+            appearances=COALESCE(excluded.appearances,players.appearances),minutes=COALESCE(excluded.minutes,players.minutes),
             recent_form=excluded.recent_form,
             market_value_eur=COALESCE(excluded.market_value_eur,players.market_value_eur),
             market_value_source=COALESCE(excluded.market_value_source,players.market_value_source),
