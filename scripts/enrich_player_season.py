@@ -66,7 +66,13 @@ def fetch(league, player_id):
         year, stats_url = current_season_ref(get_json(url))
         if not year:
             return league, player_id, None, "no current-season statistics link"
-        stats = parse_stats(get_json(stats_url))
+        payload = get_json(stats_url)
+        stats = parse_stats(payload)
+        stats["extra"] = {item["name"]: item["value"]
+                          for category in payload.get("splits", {}).get("categories", [])
+                          for item in category.get("stats", [])
+                          if isinstance(item.get("name"), str)
+                          and type(item.get("value")) in (int, float)}
         if not any(v is not None for v in stats.values()):
             return league, player_id, None, "no numeric current-season stats"
         return league, player_id, (year, stats), None
@@ -75,6 +81,7 @@ def fetch(league, player_id):
 
 
 def init(db):
+    db.execute("CREATE TABLE IF NOT EXISTS player_extra_stats (league TEXT, player_id TEXT, season_year INTEGER, payload TEXT, fetched_at TEXT, PRIMARY KEY(league,player_id,season_year))")
     db.executescript("""
     CREATE TABLE IF NOT EXISTS player_season_stats (
       league TEXT NOT NULL, player_id TEXT NOT NULL, season_year INTEGER NOT NULL,
@@ -128,7 +135,7 @@ def main():
             if league in unsupported:
                 continue
             previous = status.get((league, pid))
-            if previous:
+            if previous and db.execute("SELECT 1 FROM player_extra_stats WHERE league=? AND player_id=?", (league,pid)).fetchone():
                 try:
                     # A verified 404 is unlikely to be repaired in 48 hours.
                     # Do not repeatedly hammer missing ESPN athlete endpoints.
@@ -160,6 +167,8 @@ def main():
                 success = int(result is not None)
                 if result:
                     year, stats = result
+                    db.execute("INSERT OR REPLACE INTO player_extra_stats VALUES(?,?,?,?,?)",
+                               (league,pid,year,json.dumps(stats.get("extra",{}),allow_nan=False),stamp))
                     db.execute("""INSERT INTO player_season_stats (
                       league,player_id,season_year,goals,assists,appearances,
                       shots,shots_on_target,yellow_cards,red_cards,
@@ -235,3 +244,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
