@@ -112,6 +112,8 @@ def main():
         # Fetch upcoming-match players first; the archive's historical teams
         # must not monopolize the queue in alphabetical league order.
         priority_teams = {(league, tid) for league, tid, _ in teams_from_snapshot()}
+        if os.getenv("SEASON_TARGET_TEAMS"):
+            priority_teams = {tuple(item) for item in json.loads(os.environ["SEASON_TARGET_TEAMS"])}
         # Prioritize competitions where ESPN actually supplies season stats,
         # while still sampling untested competitions with a neutral prior.
         league_counts = {
