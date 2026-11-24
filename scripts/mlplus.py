@@ -66,7 +66,7 @@ def starting_ids(match):
         status = payload["header"]["competitions"][0]["status"]["type"]["state"]
         if status != "pre":
             return {}
-        return {str(row["team"]["id"]): {str(p["athlete"]["id"]) for p in row["roster"]
+        return {str(row["team"]["id"]): {str(p["athlete"]["id"]) for p in row.get("roster", [])
                                           if p.get("starter") is True}
                 for row in payload.get("rosters", [])}
     except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
