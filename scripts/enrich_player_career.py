@@ -22,7 +22,7 @@ UTC = timezone.utc
 
 FIELD_NAMES = {
     "goals": ("goals", "totalGoals"),
-    "assists": ("assists", "totalAssists"),
+    "assists": ("goalAssists", "assists", "totalAssists"),
     "appearances": ("appearances",),
     "shots": ("totalShots", "shots"),
     "shotsOnTarget": ("shotsOnTarget",),
