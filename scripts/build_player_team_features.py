@@ -92,6 +92,7 @@ def build(db, data, instant):
             "extraStats": extra.get((league,pid,year), ({},None))[0] if current else {},
             "extraStatsAsOf": extra.get((league,pid,year), ({},None))[1] if current else None,
             "seasonYear": year if current else None,
+            "seasonFallback": year is not None and year != league_years.get(league),
             "seasonStatsAsOf": stat_at if current else None,
             "goals": stats["goals"], "assists": stats["assists"],
             "appearances": stats["appearances"], "shots": stats["shots"],
