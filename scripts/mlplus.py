@@ -16,6 +16,7 @@ PLAYER_FIELDS = ("goals", "assists", "appearances", "minutes", "shots",
                  "shotsOnTarget", "interceptions", "tackles", "saves",
                  "yellowCards", "redCards", "age")
 
+EXTRA_FIELDS = ()
 
 def player_vector(side):
     players = [p for p in side.get("players", []) if p.get("selected", True)]
@@ -23,6 +24,11 @@ def player_vector(side):
     for field in PLAYER_FIELDS:
         known = [p[field] for p in players if type(p.get(field)) in (int, float)
                  and math.isfinite(p[field])]
+        values.extend([sum(known)/len(known) if known else 0,
+                       len(known)/max(1, len(players))])
+    for field in EXTRA_FIELDS:
+        known = [p.get("extraStats", {}).get(field) for p in players]
+        known = [v for v in known if type(v) in (int, float) and math.isfinite(v)]
         values.extend([sum(known)/len(known) if known else 0,
                        len(known)/max(1, len(players))])
     for status in ("injur", "suspend", "out", "doubtful", "questionable"):
@@ -78,6 +84,9 @@ def squad(team, minutes, starters, kickoff):
     players = [p for p in team.get("players", []) if stamp(p.get("rosterAsOf")) < kickoff]
     XI = [p for p in players if str(p["id"]) in starters] if len(starters) == 11 else []
     confirmed = len(XI) == 11
+    minutes = {**minutes, **{str(p["id"]): p["extraStats"]["minutes"] for p in players
+                            if type(p.get("extraStats", {}).get("minutes")) in (int, float)
+                            and stamp(p.get("extraStatsAsOf")) < kickoff}}
     ranked = [p for p in players if minutes.get(str(p["id"]), 0) > 0]
     if not confirmed:
         XI = sorted(ranked, key=lambda p: (-minutes[str(p["id"])], str(p["id"])))[:11]
@@ -90,11 +99,14 @@ def squad(team, minutes, starters, kickoff):
     for player in players:
         entry = dict(player)
         entry["selected"] = player in selected
-        entry["minutes"] = minutes.get(str(player["id"]))
+        entry["minutes"] = player.get("extraStats", {}).get("minutes", minutes.get(str(player["id"])))
         if stamp(player.get("seasonStatsAsOf")) >= kickoff:
             for field in PLAYER_FIELDS:
                 if field not in ("age", "minutes"):
                     entry[field] = None
+        if stamp(player.get("extraStatsAsOf")) >= kickoff:
+            entry["extraStats"] = {}
+            entry["minutes"] = minutes.get(str(player["id"]))
         captured_players.append(entry)
     return {"players": captured_players, "goalCoverage": len(known)/max(1, len(selected)),
             "knownSeasonGoals": sum(p["goals"] for p in known)*len(players)/max(1,len(known)),
@@ -102,12 +114,21 @@ def squad(team, minutes, starters, kickoff):
 
 
 def main():
+    global EXTRA_FIELDS
     data, ml = read("data.json"), read("ml_predictions.json")
     ledger = read("player-source/player_signal_history.json")
     feed = read("player-source/player_team_features.json")
     player_history_path = Path("mlplus_player_history.json")
     player_history = read(player_history_path) if player_history_path.exists() else []
     ledger["snapshots"] = player_history + ledger["snapshots"]
+    # Stable schema includes every provider numeric field observed in saved
+    # pre-match records or the current feed. Missing historical fields retain
+    # zero coverage; current values are never backfilled into past matches.
+    sides = [side for row in ledger["snapshots"] for side in (row["home"], row["away"])]
+    sides.extend(feed["teams"].values())
+    EXTRA_FIELDS = tuple(sorted({key for side in sides for player in side.get("players", [])
+                                for key, value in player.get("extraStats", {}).items()
+                                if type(value) in (int, float) and math.isfinite(value)}))
     outcomes = {x["matchId"]: x["outcome"] for x in ledger["settlements"]}
     models = {x["matchId"]: x for x in ledger.get("modelSnapshots",[]) if x["model"] == "ml"}
     rows = {}
@@ -180,7 +201,7 @@ def main():
         if all(type(v) is int for v in score):
             history.setdefault(m["id"], {"id":m["id"],"p":p["p"],"settled":True,"score":score})
             del predictions[m["id"]]
-    path.write_text(json.dumps({"trainingMatches":len(rows),"generatedAt":now.isoformat(),
+    path.write_text(json.dumps({"trainingMatches":len(rows),"extraPlayerFields":list(EXTRA_FIELDS),"inputFeatures":len(x[0]),"generatedAt":now.isoformat(),
                                "predictions":predictions,"history":list(history.values())},
                               allow_nan=False,separators=(",",":"))+"\n")
 
