@@ -114,6 +114,7 @@ def main():
 
     # Retry missing/stale season fields for today's squads before exporting.
     os.environ["SEASON_PRIORITY_ONLY"] = "1"
+    os.environ["SEASON_TARGET_TEAMS"] = json.dumps([(league, tid) for league, tid, _ in targets])
     enrich_player_season.BATCH = 3000
     enrich_player_season.main()
     db = sqlite3.connect(DB_PATH, timeout=90)
