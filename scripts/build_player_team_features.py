@@ -52,7 +52,8 @@ def numeric(value):
 def build(db, data, instant):
     teams = future_team_ids(data, instant)
     if not teams:
-        return {"version": 1, "generatedAt": now(), "teams": {},
+        return {"version": 1, "generatedAt": now(),
+                "scope": "Upcoming fixture teams only; latest available ESPN season snapshot, not historical", "teams": {},
                 "coverage": {"upcomingTeams": 0, "teamsWithRosters": 0,
                              "teamsWithSeasonGoals": 0},
                 "warning": "No upcoming fixture teams found. Not historical player data."}
