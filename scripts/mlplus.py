@@ -7,9 +7,6 @@ from pathlib import Path
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 LABELS = ("home", "draw", "away")
 PLAYER_FIELDS = ("goals", "assists", "appearances", "minutes", "shots",
@@ -87,7 +84,8 @@ def squad(team, minutes, starters, kickoff):
     minutes = {**minutes, **{str(p["id"]): p["extraStats"]["minutes"] for p in players
                             if type(p.get("extraStats", {}).get("minutes")) in (int, float)
                             and stamp(p.get("extraStatsAsOf")) < kickoff}}
-    ranked = [p for p in players if minutes.get(str(p["id"]), 0) > 0]
+    ranked = [p for p in players if minutes.get(str(p["id"]), 0) > 0
+              and not any(word in str(p.get("availability", "")).lower() for word in ("injur", "suspend", "out"))]
     if not confirmed:
         XI = sorted(ranked, key=lambda p: (-minutes[str(p["id"])], str(p["id"])))[:11]
     selected = XI if len(XI) == 11 else players
@@ -152,6 +150,9 @@ def scorer_predictions(sides):
 
 
 def main():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
     global EXTRA_FIELDS
     data, ml = read("data.json"), read("ml_predictions.json")
     ledger = read("player-source/player_signal_history.json")
