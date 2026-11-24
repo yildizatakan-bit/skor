@@ -89,6 +89,7 @@
       m.done=newDone;m.live=newLive;m.home.score=hs;m.away.score=as;m.clock=clock;
       const old=(state.history||[]).find(h=>h.id===m.id);
       if(old&&old!==m){old.done=m.done;old.live=m.live;old.clock=m.clock;old.home.score=hs;old.away.score=as;}
+      if (newDone) rememberFinal(m);
       changedModels.push(m);changed++;
     }
     if(changed){

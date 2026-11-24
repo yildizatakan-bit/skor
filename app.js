@@ -14,7 +14,32 @@ const markets=[['Maç Sonucu',[['1','home'],['X','draw'],['2','away']]],['Çifte
 // v30: new options are computed server-side from the same Elo-adjusted score matrix.
 // Historical frozen predictions without these keys remain unchanged.
 function percent(x){return Math.round(100*x)}function leagueName(code){return LEAGUES.find(x=>x[0]===code)?.[1]||code}function logo(t){return t.logo?`<img class="logo" src="${esc(t.logo)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`:'<span class="logo">⚽</span>'}
-function filtered(){return state.fixtures.filter(m=>(!m.done||retainFinished(m))&&(state.league==='all'||m.league===state.league))}function fixture(m){let data=state.history||[],an=model(m,data);return {...m,analysis:an}}function available(){return filtered().map(fixture).filter(m=>m.live||retainFinished(m)||(m.analysis?.ready&&(m.analysis.mlplus||(m.analysis.nh>=10&&m.analysis.na>=10))))}function best(m){let a=m.analysis;if(!a.ready)return null;let pairs=markets.flatMap(([group,rows])=>rows.map(([name,k])=>({group,name,k,p:a.p[k]}))).filter(x=>Number.isFinite(x.p)&&x.p>=.5);return pairs.sort((a,b)=>b.p-a.p)[0]||null}
+function expiredLiveMatch(match, now = Date.now()) {
+  const kickoff = Date.parse(match.date);
+  return match.live && !match.done && Number.isFinite(kickoff) && now - kickoff >= 4 * 3600000;
+}
+
+const confirmedFinals = new Map(Object.entries(read('confirmedFinals', {}) || {}));
+function rememberFinal(match) {
+  if (!match.done || !Number.isInteger(match.home.score) || !Number.isInteger(match.away.score)) return;
+  confirmedFinals.set(match.id, {date:match.date, home:match.home.score, away:match.away.score});
+  for (const [id, result] of confirmedFinals) {
+    if (Date.now() - Date.parse(result.date) > 7 * 86400000) confirmedFinals.delete(id);
+  }
+  save('confirmedFinals', Object.fromEntries(confirmedFinals));
+}
+
+function restoreConfirmedFinal(match) {
+  const result = confirmedFinals.get(match.id);
+  if (match.done || !result || Date.parse(result.date) !== Date.parse(match.date)) return;
+  match.done = true;
+  match.live = false;
+  match.clock = '';
+  match.home.score = result.home;
+  match.away.score = result.away;
+}
+
+function filtered(){return state.fixtures.filter(m=>!expiredLiveMatch(m)&&(!m.done||retainFinished(m))&&(state.league==='all'||m.league===state.league))}function fixture(m){let data=state.history||[],an=model(m,data);return {...m,analysis:an}}function available(){return filtered().map(fixture).filter(m=>m.live||retainFinished(m)||(m.analysis?.ready&&(m.analysis.mlplus||(m.analysis.nh>=10&&m.analysis.na>=10))))}function best(m){let a=m.analysis;if(!a.ready)return null;let pairs=markets.flatMap(([group,rows])=>rows.map(([name,k])=>({group,name,k,p:a.p[k]}))).filter(x=>Number.isFinite(x.p)&&x.p>=.5);return pairs.sort((a,b)=>b.p-a.p)[0]||null}
 function triple(a){return `<div class="triple"><div class="pill win">1<strong>%${percent(a.p.home)}</strong></div><div class="pill draw">X<strong>%${percent(a.p.draw)}</strong></div><div class="pill loss">2<strong>%${percent(a.p.away)}</strong></div></div>`}
 function hero(m,index,total){let b=best(m),ready=m.analysis.ready;return `<div class="hero" style="background-image:linear-gradient(180deg,rgba(4,17,38,.74) 0%,rgba(5,19,39,.52) 40%,rgba(4,17,34,.84) 100%),url('./stadium-featured.webp');background-size:cover;background-position:center;background-repeat:no-repeat;" id="featured-slide" data-open="${esc(m.id)}" role="button" tabindex="0" aria-label="Öne çıkan maç ${index+1} / ${total}"><div class="top"><span class="tag">★ ${b?'Günün maçı':'Günün karşılaşması'}</span><span class="flag">${esc(leagueName(m.league))}</span></div><div class="versus"><div>${logo(m.home)}<b>${esc(m.home.name)}</b></div><strong>${(m.live||m.done)&&Number.isInteger(m.home.score)&&Number.isInteger(m.away.score)?m.home.score+' - '+m.away.score:'VS'}</strong><div>${logo(m.away)}<b>${esc(m.away.name)}</b></div></div><div class="muted" style="text-align:center;margin-bottom:10px">${m.live?`<span style="color:#ff666e;font-weight:800">🔴 CANLI ${esc(m.clock||'')}</span> · ${fmt(m.date)}`:fmt(m.date)}</div><div style="font-size:clamp(22px,4.5vw,30px);font-weight:850;text-align:center;color:#f5f9ff;margin:18px 0 14px;letter-spacing:-.4px">Maç Sonucu Tahmini <span style="white-space:nowrap;color:#b7d8ff">(1-X-2)</span></div>${ready?triple(m.analysis):'<div class="muted" style="text-align:center">Bu maç için yeterli geçmiş veri yok.</div>'}${b?`<div style="margin-top:18px;padding:13px 16px;border:1px solid #315572;border-radius:14px;background:rgba(15,36,59,.65);font-size:16px;line-height:1.55;text-align:center"><span style="color:#b6cbe0">Diğer güçlü tahmin</span><div style="font-weight:750;color:#fff">${esc(b.group)} · ${esc(b.name)} — <span style="color:#ffc847">%${percent(b.p)}</span></div></div>`:''}<div class="dots slider-dots" aria-label="${index+1}. maç, toplam ${total} maç">${Array.from({length:total},(_,i)=>`<span class="slider-dot ${i===index?'active':''}" aria-hidden="true"></span>`).join('')}</div></div>`}
 function istanbulDay(date){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(date))}
@@ -161,6 +186,7 @@ async function load(force=false){
     if(!Array.isArray(j.events)||!j.events.length)throw Error('Boş veri dosyası');
     const valid=j.events.filter(x=>x&&x.id&&x.league&&x.date&&x.home&&x.away);
     if(!valid.length)throw Error('Geçerli maç bulunamadı');
+    for (const match of valid) restoreConfirmedFinal(match);
     state.history=valid;
     state.analyses=j.analyses||{};state.validation=j.validation||null;state.modelComparison=j.modelComparison||null;state.archive=Array.isArray(j.predictionArchive)?j.predictionArchive:[];
     const now=Date.now();
@@ -172,12 +198,13 @@ async function load(force=false){
   }catch(err){
     state.failures=['Yayınlanan veri dosyasına ulaşılamadı: '+err.message];
     // Do not delete last valid cached snapshot.
-    if(!state.history?.length){const cached=read('events',[]);if(Array.isArray(cached)&&cached.length){state.history=cached;state.analyses=read('analyses',{});state.fixtures=cached.filter(m=>!m.done||retainFinished(m));}}
+    if(!state.history?.length){const cached=read('events',[]);if(Array.isArray(cached)&&cached.length){cached.forEach(restoreConfirmedFinal);state.history=cached;state.analyses=read('analyses',{});state.fixtures=cached.filter(m=>!m.done||retainFinished(m));}}
   }
   state.loading=false;render();pollLive();
 }
 // Historical results are kept in a separate collection, so past matches are never lost when the fixture list is built.
 function fixtureWithHistory(m){
+  if (expiredLiveMatch(m)) m = {...m, live:false, clock:''};
   // The backend has the authoritative v14 Elo + Poisson result. Do not
   // silently replace it with the old browser-only goals-average model.
   const stored=state.analyses?.[m.id];
@@ -287,6 +314,7 @@ async function pollLive(){
         m.live=newLive;m.clock=clock;m.home.score=hs;m.away.score=as;changed=true;
       }
       if(v.done&&!m.done){recordFinished(m);m.done=true;m.live=false;changed=true}
+      if (v.done && Number.isInteger(v.hs) && Number.isInteger(v.as)) rememberFinal(m);
       if(m.live||retainFinished(m))recentLiveFixtures.set(m.id,{match:m,observedAt:Date.now()});
       else recentLiveFixtures.delete(m.id);
     }
