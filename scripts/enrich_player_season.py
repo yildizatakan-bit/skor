@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -72,8 +73,9 @@ def fetch(league, player_id):
                           for category in payload.get("splits", {}).get("categories", [])
                           for item in category.get("stats", [])
                           if isinstance(item.get("name"), str)
-                          and type(item.get("value")) in (int, float)}
-        if not any(v is not None for v in stats.values()):
+                          and type(item.get("value")) in (int, float)
+                          and math.isfinite(item["value"])}
+        if not stats["extra"] and not any(v is not None for k,v in stats.items() if k != "extra"):
             return league, player_id, None, "no numeric current-season stats"
         return league, player_id, (year, stats), None
     except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -132,17 +134,14 @@ def main():
         candidates = {}
         for league, team_id, pid in db.execute(
                 "SELECT league,team_id,player_id FROM players"):
-            if league in unsupported:
+            is_priority = (league, team_id) in priority_teams
+            if os.getenv("SEASON_PRIORITY_ONLY") == "1" and not is_priority:
                 continue
             previous = status.get((league, pid))
-            if previous and db.execute("SELECT 1 FROM player_extra_stats WHERE league=? AND player_id=?", (league,pid)).fetchone():
+            if previous:
                 try:
-                    # A verified 404 is unlikely to be repaired in 48 hours.
-                    # Do not repeatedly hammer missing ESPN athlete endpoints.
-                    retry_days = (7 if previous[1] else
-                                  30 if previous[2] and "404" in previous[2] else 2)
-                    if now_dt - datetime.fromisoformat(previous[0]) < timedelta(
-                            days=retry_days):
+                    retry_hours = 1 if is_priority and os.getenv("SEASON_PRIORITY_ONLY") == "1" else 24
+                    if now_dt - datetime.fromisoformat(previous[0]) < timedelta(hours=retry_hours):
                         continue
                 except (ValueError, TypeError):
                     pass
@@ -150,7 +149,7 @@ def main():
             is_priority = (league, team_id) in priority_teams
             candidates[key] = candidates.get(key, False) or is_priority
         pending = sorted(candidates, key=lambda key: (
-            not candidates[key], -league_quality(key[0]), key[0], key[1]))[:BATCH]
+            not candidates[key], status.get(key, ("",))[0], -league_quality(key[0]), key[0], key[1]))[:BATCH]
         priority_count = sum(bool(candidates[key]) for key in pending)
         print(f"Season stats due: {len(pending)}; upcoming-team priority: {priority_count}; "
               f"priority teams: {len(priority_teams)}", flush=True)
@@ -167,20 +166,23 @@ def main():
                 success = int(result is not None)
                 if result:
                     year, stats = result
+                    previous_extra = db.execute("SELECT payload FROM player_extra_stats WHERE league=? AND player_id=? AND season_year=?", (league,pid,year)).fetchone()
+                    merged_extra = json.loads(previous_extra[0]) if previous_extra else {}
+                    merged_extra.update(stats.get("extra", {}))
                     db.execute("INSERT OR REPLACE INTO player_extra_stats VALUES(?,?,?,?,?)",
-                               (league,pid,year,json.dumps(stats.get("extra",{}),allow_nan=False),stamp))
+                               (league,pid,year,json.dumps(merged_extra,allow_nan=False),stamp))
                     db.execute("""INSERT INTO player_season_stats (
                       league,player_id,season_year,goals,assists,appearances,
                       shots,shots_on_target,yellow_cards,red_cards,
                       interceptions,tackles,saves,source,fetched_at
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(league,player_id,season_year) DO UPDATE SET
-                      goals=excluded.goals,assists=excluded.assists,
-                      appearances=excluded.appearances,shots=excluded.shots,
-                      shots_on_target=excluded.shots_on_target,
-                      yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,
-                      interceptions=excluded.interceptions,tackles=excluded.tackles,
-                      saves=excluded.saves,fetched_at=excluded.fetched_at""",
+                      goals=COALESCE(excluded.goals,player_season_stats.goals),assists=COALESCE(excluded.assists,player_season_stats.assists),
+                      appearances=COALESCE(excluded.appearances,player_season_stats.appearances),shots=COALESCE(excluded.shots,player_season_stats.shots),
+                      shots_on_target=COALESCE(excluded.shots_on_target,player_season_stats.shots_on_target),
+                      yellow_cards=COALESCE(excluded.yellow_cards,player_season_stats.yellow_cards),red_cards=COALESCE(excluded.red_cards,player_season_stats.red_cards),
+                      interceptions=COALESCE(excluded.interceptions,player_season_stats.interceptions),tackles=COALESCE(excluded.tackles,player_season_stats.tackles),
+                      saves=COALESCE(excluded.saves,player_season_stats.saves),fetched_at=excluded.fetched_at""",
                       (league,pid,year,stats["goals"],stats["assists"],
                        stats["appearances"],stats["shots"],stats["shotsOnTarget"],
                        stats["yellowCards"],stats["redCards"],stats["interceptions"],
@@ -225,7 +227,7 @@ def main():
             "upcomingPriorityThisRun": priority_count,
             "failedReasonCounts": failures,
             "unsupportedLeagues": sorted(unsupported),
-            "unsupportedLeagueRule": "At least 100 attempted and zero successful season stats; manual override SEASON_FORCE_UNSUPPORTED=1",
+            "unsupportedLeagueRule": "Daily retry for all leagues; hourly retry for fixture teams; oldest attempts first",
             "leagueCoverage": [
                 {"league": league, "checked": checked,
                  "successful": successes, "successRate": round(successes / checked, 4)}
