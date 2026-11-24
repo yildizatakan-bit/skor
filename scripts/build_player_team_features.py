@@ -83,7 +83,7 @@ def build(db, data, instant):
         stat_at = values[len(FIELDS)]
         # Align players to the latest observed ESPN season per competition.
         # Latest available is NOT proof that the season is currently active.
-        current = year is not None and year == league_years.get(league)
+        current = year is not None
         stats = {field: numeric(value) if current else None
                  for field, value in zip(FIELDS, stats_values)}
         by_team[(league, tid)].append({
@@ -92,6 +92,7 @@ def build(db, data, instant):
             "extraStats": extra.get((league,pid,year), ({},None))[0] if current else {},
             "extraStatsAsOf": extra.get((league,pid,year), ({},None))[1] if current else None,
             "seasonYear": year if current else None,
+            "seasonFallback": year is not None and year != league_years.get(league),
             "seasonStatsAsOf": stat_at if current else None,
             "goals": stats["goals"], "assists": stats["assists"],
             "appearances": stats["appearances"], "shots": stats["shots"],
@@ -136,7 +137,7 @@ def build(db, data, instant):
         "coverage": {"upcomingTeams": len(teams), "teamsWithRosters": with_roster,
                      "teamsWithSeasonGoals": with_goals},
         "limitations": {
-            "assists": "Unavailable in verified ESPN soccer fields; NULL is not zero",
+            "assists": "Collected when supplied; missing values retain last known season data",
             "recentForm": "Not available until verified match-by-match history is collected",
             "marketValue": "Only values from licensed and attributed imports",
             "lineup": "Roster membership does not establish match starting XI",
