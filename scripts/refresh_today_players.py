@@ -10,6 +10,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -111,6 +112,10 @@ def main():
             for future in as_completed(futures):
                 successes += future.result()
 
+    # Retry missing/stale season fields for today's squads before exporting.
+    os.environ["SEASON_PRIORITY_ONLY"] = "1"
+    enrich_player_season.BATCH = 3000
+    enrich_player_season.main()
     db = sqlite3.connect(DB_PATH, timeout=90)
     try:
         db.execute("PRAGMA busy_timeout=90000")
