@@ -40,6 +40,7 @@ jobs:
             git pull --rebase --autostash
             git push origin HEAD:feature/ml-comparison-20261027
           fi
+      - run: python scripts/test_mlplus.py
       - run: python scripts/mlplus.py
       - run: |
           git config user.name "github-actions[bot]"
