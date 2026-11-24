@@ -37,3 +37,8 @@ assert(rendered.includes('Poisson / Elo'));assert(rendered.includes('Scorer list
 ctx.base={ready:false};
 assert.doesNotThrow(()=>ctx.detail());
 console.log('MLPlus other markets preserved and rendered without baseline form');
+
+const standalone={document:{addEventListener(){}},esc:ctx.esc,mlV45:{mode:'mlplus',plus:{},scorers:{match:{kickoff:match.date,selection:['minutes','minutes'],scorers:{teams:{home:[],away:[]}}}}}};
+vm.createContext(standalone);vm.runInContext(code,standalone);
+assert(standalone.scorerList(match).includes('Tahmini kadro'));
+console.log('Independent scorer feed renders without MLPlus result forecast');
