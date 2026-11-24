@@ -58,6 +58,9 @@ def build(db, data, instant):
                 "warning": "No upcoming fixture teams found. Not historical player data."}
     league_years = dict(db.execute(
         "SELECT league,MAX(season_year) FROM player_season_stats GROUP BY league"))
+    extra = {}
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='player_extra_stats'").fetchone():
+        extra = {(league,pid,year):(json.loads(payload),at) for league,pid,year,payload,at in db.execute("SELECT * FROM player_extra_stats")}
     by_team = defaultdict(list)
     for row in db.execute("""
       SELECT p.league,p.team_id,p.player_id,p.name,p.position,p.age,p.nationality,
@@ -85,6 +88,8 @@ def build(db, data, instant):
         by_team[(league, tid)].append({
             "id": pid, "name": name, "position": position, "age": age,
             "nationality": nation, "availability": avail or "unknown",
+            "extraStats": extra.get((league,pid,year), ({},None))[0] if current else {},
+            "extraStatsAsOf": extra.get((league,pid,year), ({},None))[1] if current else None,
             "seasonYear": year if current else None,
             "seasonStatsAsOf": stat_at if current else None,
             "goals": stats["goals"], "assists": stats["assists"],
@@ -158,3 +163,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
