@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests: never treat historical player stats as current or unknown as zero."""
+"""Regression tests: last-known season fallback is explicit and unknown remains missing."""
 from datetime import datetime, timedelta, timezone
 import sqlite3
 import unittest
@@ -40,14 +40,15 @@ class PlayerFeatureTests(unittest.TestCase):
         self.assertEqual(set(future_team_ids(data,instant)), {("eng.1","1"),("eng.1","2")})
         result = build(db,data,instant)
         home = result["teams"]["eng.1:1"]
-        self.assertEqual(home["verifiedSeasonGoalPlayers"],1)
-        self.assertEqual(home["verifiedSeasonGoalCoverage"],0.5)
-        self.assertEqual(home["verifiedSeasonGoalsSum"],0)
+        self.assertEqual(home["verifiedSeasonGoalPlayers"],2)
+        self.assertEqual(home["verifiedSeasonGoalCoverage"],1)
+        self.assertEqual(home["verifiedSeasonGoalsSum"],10)
         self.assertIsNone(home["knownMarketValueEurSum"])
         self.assertIsNone(home["players"][0]["assists"])
         older = next(p for p in home["players"] if p["id"]=="10")
-        self.assertIsNone(older["goals"])
-        self.assertIsNone(older["seasonYear"])
+        self.assertEqual(older["goals"],10)
+        self.assertTrue(older["seasonFallback"])
+        self.assertEqual(older["seasonYear"],2025)
         self.assertNotIn("eng.1:3",result["teams"])
         self.assertEqual(result["coverage"]["teamsWithSeasonGoals"],1)
         db.close()
