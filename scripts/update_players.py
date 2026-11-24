@@ -225,9 +225,21 @@ def update_one(db, league, team_id, market):
         statuses = injuries(get_json(base + "/injuries"))
     except (OSError, urllib.error.URLError, ValueError, KeyError):
         statuses = {}
+    embedded = {}
+    for item in athletes(roster):
+        obj = item.get("athlete", item)
+        ident = str(obj.get("id", ""))
+        status = obj.get("status") or {}
+        label = status.get("name", "") if isinstance(status, dict) else str(status)
+        reports = obj.get("injuries") or []
+        labels = [str(r.get("status") or r.get("type") or "") for r in reports if isinstance(r, dict)]
+        if label.lower() in ("injured", "suspended", "out", "doubtful", "questionable"):
+            labels.append(label)
+        if labels:
+            embedded[ident] = "; ".join(labels)
     timestamp = now()
     for p in players:
-        p["availability"] = statuses.get(p["id"], "unknown")
+        p["availability"] = statuses.get(p["id"], embedded.get(p["id"], "unknown"))
         licensed = market.get((league, team_id, p["id"]))
         if licensed:
             p["marketValueEur"], p["marketValueSource"], p["marketValueAsOf"] = licensed
@@ -328,3 +340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
