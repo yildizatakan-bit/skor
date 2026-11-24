@@ -1,0 +1,27 @@
+name: Verify MLPlus player scoring
+on:
+  pull_request:
+    paths:
+      - 'app.js'
+      - 'scripts/mlplus.py'
+      - 'scripts/test_mlplus_scorers.py'
+      - 'scripts/test_scorer_ui.cjs'
+      - '.github/workflows/mlplus-scorers-check.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install scikit-learn
+      - run: python scripts/test_mlplus_scorers.py
+      - run: node --check app.js
+      - run: node scripts/test_scorer_ui.cjs
