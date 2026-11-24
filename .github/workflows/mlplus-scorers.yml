@@ -1,0 +1,42 @@
+name: Update MLPlus player goal forecasts
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/publish_mlplus_scorers.py'
+      - 'scripts/mlplus.py'
+      - '.github/workflows/mlplus-scorers.yml'
+  schedule:
+    - cron: '*/10 * * * *'
+permissions:
+  contents: write
+concurrency:
+  group: mlplus-player-scorers
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ml-comparison-20261027
+          path: player-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/test_scorer_publication.py
+      - run: python scripts/publish_mlplus_scorers.py
+      - name: Publish scorer forecasts without waiting for ML training
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mlplus_scorers.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update pre-match player goal forecasts"
+            git pull --rebase
+            git push
+          fi
