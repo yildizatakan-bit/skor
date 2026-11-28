@@ -1,5 +1,10 @@
 name: Hourly player data for today's matches
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hourly-today-player-refresh.yml'
+      - 'scripts/refresh_today_players.py'
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
@@ -44,7 +49,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f player_data.sqlite3
-          git add player_features.json player_coverage.json player_team_features.json
+          git add player_features.json player_coverage.json player_team_features.json player_season_coverage.json
           if ! git diff --cached --quiet; then
             git commit -m "Refresh squads and player data for today’s matches"
             pushed=0
