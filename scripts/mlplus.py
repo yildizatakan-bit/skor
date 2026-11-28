@@ -2,6 +2,7 @@
 import json
 import math
 import sqlite3
+from mlplus_history import load_history, save_history
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
@@ -157,8 +158,7 @@ def main():
     data, ml = read("data.json"), read("ml_predictions.json")
     ledger = read("player-source/player_signal_history.json")
     feed = read("player-source/player_team_features.json")
-    player_history_path = Path("mlplus_player_history.json")
-    player_history = read(player_history_path) if player_history_path.exists() else []
+    player_history = load_history()
     ledger["snapshots"] = player_history + ledger["snapshots"]
     # Stable schema includes every provider numeric field observed in saved
     # pre-match records or the current feed. Missing historical fields retain
@@ -231,7 +231,7 @@ def main():
         predictions[m["id"]] = {"p": probabilities, "kickoff":m["date"],
                                 "recordedAt":captured.isoformat(), "selection":selection,
                                 "scorers":scorer_predictions(sides)}
-    player_history_path.write_text(json.dumps(player_history, allow_nan=False, separators=(",", ":")))
+    save_history(player_history)
     history = {r["id"]:r for r in previous.get("history",[])}
     for m in data["events"]:
         p = predictions.get(m["id"])
