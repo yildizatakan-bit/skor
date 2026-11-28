@@ -1,5 +1,11 @@
 name: Update MLPlus
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/mlplus.py'
+      - 'scripts/mlplus_history.py'
+      - '.github/workflows/mlplus.yml'
   workflow_dispatch:
   schedule:
     - cron: '37 * * * *'
@@ -40,12 +46,13 @@ jobs:
             git pull --rebase --autostash
             git push origin HEAD:feature/ml-comparison-20261027
           fi
+      - run: python scripts/test_mlplus_history.py
       - run: python scripts/test_mlplus.py
       - run: python scripts/mlplus.py
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add mlplus_predictions.json mlplus_player_history.json
+          git add mlplus_predictions.json mlplus_player_history/
           if ! git diff --cached --quiet; then
             git commit -m "Update MLPlus forecasts"
             git pull --rebase
